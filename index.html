@@ -72,6 +72,23 @@
 
 <div id="toast"></div>
 
+<!-- preview sheet: images / video / audio / text / pdf open in here -->
+<div id="viewer" aria-hidden="true">
+  <div class="sheet">
+    <div class="vhead">
+      <span class="t" id="vTitle">預覽</span>
+      <span class="s" id="vMeta"></span>
+      <button class="btn icon" id="vDl">下載</button>
+      <button class="btn icon" id="vClose">關閉</button>
+    </div>
+    <div class="vbody" id="vBody"></div>
+    <div class="vfoot">
+      <span class="note" id="vNote"></span>
+      <button class="btn icon" id="vOpen">用本機程式開啟</button>
+    </div>
+  </div>
+</div>
+
 <script src="config.js"></script>
 <script src="app.js"></script>
 </body>

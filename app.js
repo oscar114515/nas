@@ -97,14 +97,23 @@ function navTo(path, dir) {
   function go() {
     /* drop the outgoing fill BEFORE repainting the rows, or it wins again */
     if (navAnim) { navAnim.cancel(); navAnim = null; }
+    /* The row-by-row fade belongs to first paint and manual refresh only. During
+       a page turn it plays on top of the slide, so the whole transition looks
+       like it runs twice - which is exactly what the user reported when going
+       past the first level. Turn it off for the duration of the turn. */
+    ul.classList.add('no-row-anim');
     load(path).then(function () {
       if (reducedMotion()) return;
       navAnim = ul.animate(inF, { duration: 240, easing: 'cubic-bezier(.2, .8, .3, 1)' });
       return navAnim.finished;
     }).then(function () {
       if (navAnim) { navAnim.cancel(); navAnim = null; }
+      ul.classList.remove('no-row-anim');
       navLock = false;
-    }, function () { navLock = false; });
+    }, function () {
+      ul.classList.remove('no-row-anim');
+      navLock = false;
+    });
   }
 
   if (reducedMotion()) { go(); return; }
@@ -176,6 +185,152 @@ function mkBtn(cls, label, veilText, work) {
   b.onclick = tap(b, veilText, work);
   return b;
 }
+
+/* ------------------------------------------------------------- file kinds */
+
+function extOf(n) {
+  var m = String(n).match(/\.([A-Za-z0-9]+)$/);
+  return m ? m[1].toLowerCase() : '';
+}
+
+var KIND_EXT = {
+  image: ['jpg', 'jpeg', 'jpe', 'png', 'gif', 'webp', 'bmp', 'svg', 'avif', 'heic', 'tif', 'tiff'],
+  video: ['mp4', 'm4v', 'webm', 'mov', 'mkv', 'avi', '3gp'],
+  audio: ['mp3', 'm4a', 'wav', 'ogg', 'flac', 'aac', 'opus', 'wma'],
+  word:  ['doc', 'docx', 'rtf', 'odt'],
+  ppt:   ['ppt', 'pptx', 'odp', 'key'],
+  xls:   ['xls', 'xlsx', 'ods', 'numbers'],
+  text:  ['txt', 'md', 'log', 'json', 'xml', 'js', 'css', 'ini', 'conf', 'yml', 'yaml', 'srt', 'csv'],
+  zip:   ['zip', 'rar', '7z', 'gz', 'tar', 'bz2', 'xz', 'tgz'],
+};
+
+function kindOf(name) {
+  var e = extOf(name);
+  for (var k in KIND_EXT) { if (KIND_EXT[k].indexOf(e) >= 0) return k; }
+  if (e === 'pdf') return 'pdf';
+  return 'file';
+}
+
+var KIND_CLASS = {
+  image: '', video: 't-video', audio: 't-audio', word: 't-word', ppt: 't-ppt',
+  xls: 't-xls', pdf: 't-pdf', text: 't-text', zip: 't-zip', file: '', dir: 't-dir',
+};
+
+/* Inline SVG rather than emoji: emoji render differently on every platform and
+   read as decoration instead of as a file type. */
+var FILE_SVG =
+  '<path d="M14 3H7a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V8z" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linejoin="round"/>' +
+  '<path d="M14 3v5h5" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linejoin="round"/>';
+var LETTER = 'font-family="Arial,Helvetica,sans-serif" font-size="6.2" font-weight="700" text-anchor="middle" fill="currentColor"';
+
+function fileIcon(kind) {
+  if (kind === 'dir') {
+    return '<svg viewBox="0 0 24 24" fill="currentColor"><path d="M2.8 6.6A1.6 1.6 0 0 1 4.4 5h4.3l1.9 2.3h9A1.6 1.6 0 0 1 21.2 8.9v8.5a1.6 1.6 0 0 1-1.6 1.6H4.4a1.6 1.6 0 0 1-1.6-1.6z"/></svg>';
+  }
+  if (kind === 'audio') {
+    return '<svg viewBox="0 0 24 24" fill="currentColor"><path d="M9.2 17.4V6.1l9.6-1.9v11.3"/><circle cx="7.1" cy="17.5" r="2.7"/><circle cx="16.7" cy="15.3" r="2.7"/></svg>';
+  }
+  if (kind === 'video') {
+    return '<svg viewBox="0 0 24 24" fill="currentColor"><rect x="2.4" y="4.9" width="14.2" height="14.2" rx="2.4"/><path d="M17.8 10.1l3.8-2.3v8.4l-3.8-2.3z"/></svg>';
+  }
+  var inner = '';
+  if (kind === 'word') inner = '<text x="12" y="16.6" ' + LETTER + '>W</text>';
+  else if (kind === 'ppt') inner = '<text x="12" y="16.6" ' + LETTER + '>P</text>';
+  else if (kind === 'xls') inner = '<text x="12" y="16.6" ' + LETTER + '>X</text>';
+  else if (kind === 'pdf') inner = '<text x="12" y="16.6" ' + LETTER + '>PDF</text>';
+  else if (kind === 'zip') inner = '<rect x="9.9" y="9.6" width="4.2" height="3.1" rx=".6" fill="currentColor"/><rect x="9.9" y="13.4" width="4.2" height="3.1" rx=".6" fill="currentColor"/>';
+  else if (kind === 'text') inner = '<path d="M8.7 12.4h6.6M8.7 15.3h4.4" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/>';
+  return '<svg viewBox="0 0 24 24">' + FILE_SVG + inner + '</svg>';
+}
+
+function rawUrl(rel) { return API + '/api/raw?path=' + encodeURIComponent(rel) + '&t=' + encodeURIComponent(token); }
+function dlUrl(rel) { return API + '/api/download?path=' + encodeURIComponent(rel); }
+
+/* Real thumbnail for images, real first frame for video, drawn icon for the rest.
+   Capped: a folder of 200 photos would otherwise pull 200 originals down a
+   ~1.6 MB/s link just to render a list. */
+var LIVE_THUMBS = 24;
+
+function thumbFor(kind, rel, idx) {
+  if (idx < LIVE_THUMBS) {
+    if (kind === 'image') return '<img loading="lazy" alt="" src="' + rawUrl(rel) + '">';
+    if (kind === 'video') return '<video preload="metadata" muted playsinline src="' + rawUrl(rel) + '#t=0.6"></video>';
+  }
+  return fileIcon(kind);
+}
+
+/* ----------------------------------------------------------------- preview */
+
+var PREVIEWABLE = { image: 1, video: 1, audio: 1, text: 1, pdf: 1 };
+
+var KIND_LABEL = {
+  image: '圖片', video: '影片', audio: '音訊', pdf: 'PDF', word: 'Word 文件',
+  ppt: 'PowerPoint', xls: 'Excel 檔', text: '文字檔', zip: '壓縮檔',
+  dir: '資料夾', file: '檔案',
+};
+
+function inActions(e) {
+  var n = e.target;
+  while (n && n !== document.body) {
+    if (n.classList && n.classList.contains('acts')) return true;
+    n = n.parentNode;
+  }
+  return false;
+}
+
+var viewerRel = '';
+
+function openViewer(rel, name, kind, size) {
+  viewerRel = rel;
+  var body = $('vBody');
+  body.className = 'vbody';
+  body.innerHTML = '';
+
+  $('vTitle').textContent = name;
+  $('vMeta').textContent = (KIND_LABEL[kind] || '檔案') + (size != null ? ' · ' + fmtSize(size) : '');
+  $('vNote').textContent = '檔案直接從你的硬碟讀出，沒有經過任何外部服務。';
+
+  if (kind === 'image') {
+    body.innerHTML = '<img alt="" src="' + rawUrl(rel) + '">';
+  } else if (kind === 'video') {
+    body.innerHTML = '<video controls autoplay playsinline src="' + rawUrl(rel) + '"></video>';
+  } else if (kind === 'audio') {
+    body.innerHTML = '<audio controls autoplay src="' + rawUrl(rel) + '"></audio>';
+  } else if (kind === 'pdf') {
+    body.innerHTML = '<iframe src="' + rawUrl(rel) + '#toolbar=1" title="PDF 預覽"></iframe>';
+  } else if (kind === 'text') {
+    body.className = 'vbody sheet-pad';
+    body.innerHTML = '<pre>讀取中…</pre>';
+    fetch(rawUrl(rel), { headers: { Authorization: 'Bearer ' + token } })
+      .then(function (r) { return r.ok ? r.text() : Promise.reject(new Error('HTTP ' + r.status)); })
+      .then(function (t) { var pre = body.querySelector('pre'); if (pre) pre.textContent = t; })
+      .catch(function (e) {
+        body.innerHTML = '<div class="none"><div class="big">讀取失敗</div>' + e.message + '</div>';
+      });
+  } else {
+    body.innerHTML = '<div class="none"><div class="big">這個格式沒法在網上預覽</div>' +
+      '用下面的按鈕下載，或在新分頁開啟原始檔。</div>';
+  }
+
+  $('viewer').classList.add('on');
+  $('viewer').setAttribute('aria-hidden', 'false');
+}
+
+function closeViewer() {
+  var v = $('viewer');
+  v.classList.remove('on');
+  v.setAttribute('aria-hidden', 'true');
+  $('vBody').innerHTML = '';          /* also stops any playing video/audio */
+  viewerRel = '';
+}
+
+$('vClose').onclick = closeViewer;
+$('viewer').onclick = function (e) { if (e.target === this) closeViewer(); };
+$('vDl').onclick = function () { if (viewerRel) download(viewerRel); };
+$('vOpen').onclick = function () { if (viewerRel) window.open(rawUrl(viewerRel), '_blank', 'noopener'); };
+document.addEventListener('keydown', function (e) {
+  if (e.key === 'Escape' && $('viewer').classList.contains('on')) closeViewer();
+});
 
 /* ------------------------------------------------------------------- format */
 
@@ -323,13 +478,14 @@ function renderList(d) {
 
   all.forEach(function (it, idx) {
     var rel = cwd ? cwd + '/' + it.name : it.name;
+    var kind = it.dir ? 'dir' : kindOf(it.name);
     var li = document.createElement('li');
     li.className = 'tappable';
     li.style.setProperty('--i', String(Math.min(idx, 26)));
 
     var ic = document.createElement('span');
-    ic.className = 'ico';
-    ic.textContent = it.dir ? '📁' : '📄';
+    ic.className = 'ico' + (KIND_CLASS[kind] ? ' ' + KIND_CLASS[kind] : '');
+    ic.innerHTML = it.dir ? fileIcon('dir') : thumbFor(kind, rel, idx);
     li.appendChild(ic);
 
     var nm = document.createElement('span');
@@ -349,15 +505,25 @@ function renderList(d) {
     md.textContent = fmtDate(it.mtime);
     li.appendChild(md);
 
+    /* One handler for the whole row. The action buttons check themselves out of
+       the way, so tapping anywhere else does the obvious thing. */
+    li.onclick = function (e) {
+      if (inActions(e)) return;
+      if (it.dir) { navTo(rel, 1); return; }
+      if (PREVIEWABLE[kind]) openViewer(rel, it.name, kind, it.size);
+    };
+
     if (it.dir) {
       var chev = document.createElement('span');
       chev.className = 'chev';
       chev.textContent = '›';
       li.appendChild(chev);
-      li.onclick = function () { navTo(rel, 1); };
     } else {
       var acts = document.createElement('span');
       acts.className = 'acts';
+      if (PREVIEWABLE[kind]) {
+        acts.appendChild(mkBtn('', '預覽', null, function () { openViewer(rel, it.name, kind, it.size); }));
+      }
       acts.appendChild(mkBtn('', '下載', '下載中…', function () { return download(rel); }));
       acts.appendChild(mkBtn('', '改名', null, function () {
         var n = prompt('新名稱：', it.name);
