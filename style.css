@@ -392,7 +392,32 @@ ul.wx-list.no-row-anim li { animation: none; }
   white-space: pre-wrap; word-break: break-word;
 }
 #viewer .vbody .none { margin: auto; color: #aeb5c0; font-size: 13px; text-align: center; padding: 24px; }
-#viewer .vbody .none .big { font-size: 15px; color: #e6e8ee; margin-bottom: 8px; }
+#viewer .vbody .none .big { font-size: 15px; color: #e6e8ee; margin: 8px 0; }
+
+/* loading / oversized states, dressed in the same icon + colour language */
+#viewer .vload {
+  margin: auto;
+  display: flex; flex-direction: column; align-items: center; gap: 14px;
+  color: #aeb5c0; font-size: 13px; text-align: center; padding: 24px;
+}
+#viewer .vload .tx { max-width: 30em; }
+#viewer .vload .ic,
+#viewer .vbody .none .ic {
+  width: 46px; height: 46px;
+  display: flex; align-items: center; justify-content: center;
+  border-radius: 11px;
+  background: rgba(255, 255, 255, .07);
+  color: #cdd3dc;
+}
+#viewer .vload .ic svg,
+#viewer .vbody .none .ic svg { width: 26px; height: 26px; }
+#viewer .vload .ic.t-word, #viewer .vbody .none .ic.t-word { background: #e8f0fd; color: #2b579a; }
+#viewer .vload .ic.t-ppt,  #viewer .vbody .none .ic.t-ppt  { background: #fdeee8; color: #c43e1c; }
+#viewer .vload .ic.t-xls,  #viewer .vbody .none .ic.t-xls  { background: #e6f4ea; color: #1d6f42; }
+#viewer .vload .ic.t-pdf,  #viewer .vbody .none .ic.t-pdf  { background: #fdecec; color: #c0392b; }
+#viewer .vload .ic.t-zip,  #viewer .vbody .none .ic.t-zip  { background: #fdf3e2; color: #a3701a; }
+#viewer .vload .ic.t-audio,#viewer .vbody .none .ic.t-audio{ background: #f3ecfd; color: #6b3fc4; }
+#viewer .vload .ic.t-video,#viewer .vbody .none .ic.t-video{ background: #e9f2fd; color: #1f6fb2; }
 #viewer .vfoot {
   display: flex; align-items: center; gap: 8px;
   padding: 10px 12px;

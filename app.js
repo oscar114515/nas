@@ -261,7 +261,17 @@ function thumbFor(kind, rel, idx) {
 
 /* ----------------------------------------------------------------- preview */
 
-var PREVIEWABLE = { image: 1, video: 1, audio: 1, text: 1, pdf: 1 };
+var PREVIEWABLE = { image: 1, video: 1, audio: 1, text: 1, pdf: 1, word: 1, ppt: 1, xls: 1 };
+
+/* Microsoft Office Web Viewer - free, no API key, no registration, no account.
+ * Two hard limits, both handled here rather than by discovering them as an
+ * error inside Microsoft's iframe:
+ *   - 10 MB per document
+ *   - the file must be reachable from the public internet, which is why
+ *     /api/share mints a signed link that dies after 5 minutes. */
+var OFFICE_KINDS = { word: 1, ppt: 1, xls: 1 };
+var OFFICE_MAX = 10 * 1024 * 1024;
+var OFFICE_VIEWER = 'https://view.officeapps.live.com/op/embed.aspx?src=';
 
 var KIND_LABEL = {
   image: '圖片', video: '影片', audio: '音訊', pdf: 'PDF', word: 'Word 文件',
@@ -279,6 +289,14 @@ function inActions(e) {
 }
 
 var viewerRel = '';
+
+/* Same spinner, same icon, same colours as the rest of the site - waiting on a
+ * third-party viewer should still look like part of this app. */
+function vloading(kind, text) {
+  return '<div class="vload"><div class="spin lg"></div>' +
+         '<div class="ic ' + (KIND_CLASS[kind] || '') + '">' + fileIcon(kind) + '</div>' +
+         '<div class="tx">' + text + '</div></div>';
+}
 
 function openViewer(rel, name, kind, size) {
   viewerRel = rel;
@@ -307,6 +325,27 @@ function openViewer(rel, name, kind, size) {
       .catch(function (e) {
         body.innerHTML = '<div class="none"><div class="big">讀取失敗</div>' + e.message + '</div>';
       });
+  } else if (OFFICE_KINDS[kind]) {
+    if (size != null && size > OFFICE_MAX) {
+      /* Checked BEFORE asking for a share link: no point minting a public URL
+       * for a document Microsoft is going to refuse anyway. */
+      body.innerHTML = '<div class="none">' +
+        '<div class="ic ' + (KIND_CLASS[kind] || '') + '">' + fileIcon(kind) + '</div>' +
+        '<div class="big">這個檔案超過 10 MB</div>' +
+        '微軟的線上預覽最多處理 10 MB（這個是 ' + fmtSize(size) + '）。<br>' +
+        '請用下面的按鈕下載，再用電腦上的 Office 開啟。</div>';
+    } else {
+      body.innerHTML = vloading(kind, '正在開啟 Office 在線預覽…');
+      req('GET', '/api/share?path=' + encodeURIComponent(rel))
+        .then(function (d) {
+          body.innerHTML = '<iframe src="' + OFFICE_VIEWER + encodeURIComponent(d.url) +
+                           '" title="Office 預覽"></iframe>';
+        })
+        .catch(function (e) {
+          body.innerHTML = '<div class="none"><div class="big">無法開啟在線預覽</div>' +
+            e.message + '</div>';
+        });
+    }
   } else {
     body.innerHTML = '<div class="none"><div class="big">這個格式沒法在網上預覽</div>' +
       '用下面的按鈕下載，或在新分頁開啟原始檔。</div>';
