@@ -1,40 +1,36 @@
 /* =============================================================================
-   Oscar NAS - WeChat-flavoured UI.
+   Oscar NAS - dark theme (the look the user actually preferred).
 
-   Design tokens come from the official WeChat / WeUI spec:
-     brand green   #07C160   (hover #10B160, pressed #059050)
-     page canvas   #EDEDED   <- NOT white; WeChat never uses a pure-white canvas
-     surface       #FFFFFF
-     separator     #E5E5E5
-     ink           #1A1A1A / #888888 / #B2B2B2
-     link blue     #576B95
-     danger red    #FA5151
-     pressed row   #ECECEC
-   Rules I deliberately follow, because they are what makes WeChat look like
-   WeChat and not like a generic Material template:
-     - 4px corner radius, never more
-     - 44px+ row / button height
-     - NO drop shadows, NO gradients on surfaces, NO pill buttons
-     - a tap colours the WHOLE row grey; WeChat has no ripple
-     - motion is short (150-240ms) and directional, like turning a page
+   The 20:15 WeChat-white experiment is rolled back. Kept from it, because the
+   user asked for them explicitly and they are not what made it feel "AI":
+     - a 2px hairline at the very top as the ONLY page-level loading indicator
+       (no spinner card, no dimmed overlay)
+     - a page-turn transition when you open a folder
+   Colour tokens are the original ones; only the loader bar and the press state
+   were nudged so they still read correctly on a dark canvas.
    ========================================================================== */
 
 :root {
-  --green: #07C160;
-  --green-hi: #10B160;
-  --green-lo: #059050;
-  --page: #ededed;
-  --surface: #ffffff;
-  --surface-2: #f7f7f7;
-  --line: #e5e5e5;
-  --line-2: #e0e0e0;
-  --ink: #1a1a1a;
-  --ink-2: #888888;
-  --ink-3: #b2b2b2;
-  --link: #576b95;
-  --press: #ececec;
-  --red: #fa5151;
-  --r: 4px;
+  --bg: #0f1115;
+  --panel: #161a21;
+  --panel2: #1c222b;
+  --surface: #161a21;
+  --surface-2: #1c222b;
+  --line: #262d38;
+  --line-2: #2f3742;
+  --ink: #e6e8ee;
+  --ink-2: #8b93a7;
+  --ink-3: #6b7480;
+  --link: #4c8dff;
+  --accent: #4c8dff;
+  --press: #1e242e;
+  --red: #e2544a;
+  --ok: #35b37e;
+  --r: 10px;
+  /* aliases so the accent-coloured bits (loader, primary button) stay in one place */
+  --green: #4c8dff;
+  --green-hi: #6ba1ff;
+  --green-lo: #3a7ae0;
 }
 
 * { box-sizing: border-box; }
@@ -42,7 +38,7 @@
 html, body {
   margin: 0;
   padding: 0;
-  background: var(--page);
+  background: var(--bg);
   color: var(--ink);
   font: 15px/1.5 -apple-system, BlinkMacSystemFont, "Segoe UI", "Microsoft JhengHei",
         "PingFang HK", "Helvetica Neue", Helvetica, Arial, sans-serif;
@@ -61,7 +57,7 @@ button, input, select { font: inherit; color: inherit; }
 #topbar {
   position: fixed; top: 0; left: 0; right: 0;
   height: 2px; z-index: 90;
-  background: rgba(7, 193, 96, .12);
+  background: rgba(76, 141, 255, .16);
   opacity: 0; pointer-events: none;
 }
 #topbar.on { opacity: 1; }
@@ -112,7 +108,7 @@ button, input, select { font: inherit; color: inherit; }
 
 /* ------------------------------------------------------------------- login */
 
-#login { min-height: 100vh; background: var(--page); }
+#login { min-height: 100vh; background: var(--bg); }
 
 .wx-card {
   margin: 28px 16px;
@@ -175,7 +171,7 @@ button, input, select { font: inherit; color: inherit; }
   transition: background-color .13s ease, border-color .13s ease,
               color .13s ease, opacity .13s ease;
 }
-.btn:hover { border-color: #cfcfcf; }
+.btn:hover { border-color: #3b4450; }
 .btn:active { background: var(--press); }
 .btn:focus-visible { outline: 2px solid var(--green); outline-offset: 1px; }
 .btn[disabled] { opacity: .5; cursor: default; }
@@ -269,7 +265,7 @@ ul.wx-list li.empty { justify-content: center; color: var(--ink-2); font-size: 1
 ul.wx-list.loading { background: transparent; }
 ul.wx-list.loading li.skel {
   height: 54px;
-  background: linear-gradient(90deg, #f2f2f2 25%, #e8e8e8 37%, #f2f2f2 63%);
+  background: linear-gradient(90deg, #161a21 25%, #1f2632 37%, #161a21 63%);
   background-size: 400% 100%;
   border-bottom: none;
   animation: wxSweep 1.3s ease-in-out infinite;
@@ -295,14 +291,15 @@ ul.wx-list.loading li.skel {
   max-width: 82vw;
   transform: translate(-50%, 12px);
   padding: 11px 18px;
-  background: rgba(0, 0, 0, .78);
+  background: rgba(34, 41, 51, .97);
+  border: 1px solid var(--line);
   border-radius: var(--r);
   color: #fff; font-size: 14px; text-align: center;
   opacity: 0; pointer-events: none;
   transition: opacity .18s ease, transform .22s cubic-bezier(.2, .8, .3, 1);
 }
 #toast.on { opacity: 1; transform: translate(-50%, 0); }
-#toast.err { background: rgba(250, 81, 81, .94); }
+#toast.err { background: rgba(226, 84, 74, .96); border-color: var(--red); }
 
 @media (max-width: 560px) {
   ul.wx-list { margin: 0 12px; }

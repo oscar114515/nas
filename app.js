@@ -72,6 +72,16 @@ function reducedMotion() {
 
 /* dir > 0 : going deeper -> old list leaves left,  new arrives from right
    dir < 0 : going back   -> old list leaves right, new arrives from left   */
+/* BUG THIS FIXES (user reported it 2026-10-03 20:15: "click a folder, see the
+ * files for a moment, then the page goes white and nothing is there").
+ * Cause: the outgoing animation used fill:'forwards', so after it finished it
+ * KEPT pinning the <ul> at opacity:0 / translateX(...). The incoming animation
+ * played on top of that and looked correct while it ran -- then the instant it
+ * ended, the older forwards-filled effect took over again and the list vanished.
+ * Rule learned: never let two animations target the same property on the same
+ * element unless you cancel the first one. */
+var navAnim = null;
+
 function navTo(path, dir) {
   if (navLock) return;
   navLock = true;
@@ -85,15 +95,22 @@ function navTo(path, dir) {
     : [{ transform: 'translateX(-28px)', opacity: 0 }, { transform: 'translateX(0)', opacity: 1 }];
 
   function go() {
+    /* drop the outgoing fill BEFORE repainting the rows, or it wins again */
+    if (navAnim) { navAnim.cancel(); navAnim = null; }
     load(path).then(function () {
-      if (!reducedMotion()) ul.animate(inF, { duration: 240, easing: 'cubic-bezier(.2, .8, .3, 1)' });
-    }).then(function () { navLock = false; }, function () { navLock = false; });
+      if (reducedMotion()) return;
+      navAnim = ul.animate(inF, { duration: 240, easing: 'cubic-bezier(.2, .8, .3, 1)' });
+      return navAnim.finished;
+    }).then(function () {
+      if (navAnim) { navAnim.cancel(); navAnim = null; }
+      navLock = false;
+    }, function () { navLock = false; });
   }
 
   if (reducedMotion()) { go(); return; }
-  var a = ul.animate(outF, { duration: 140, easing: 'cubic-bezier(.4, 0, .9, .5)', fill: 'forwards' });
-  if (a.finished && a.finished.then) a.finished.then(go, go);
-  else a.onfinish = go;
+  navAnim = ul.animate(outF, { duration: 140, easing: 'cubic-bezier(.4, 0, .9, .5)', fill: 'forwards' });
+  if (navAnim.finished && navAnim.finished.then) navAnim.finished.then(go, go);
+  else navAnim.onfinish = go;
 }
 
 /* ---------------------------------------------------------------- transport */
