@@ -265,6 +265,13 @@ function thumbUrl(rel, edge) {
 
 /* Real thumbnails are handled by the serial queue further down, not here. */
 
+/* Mirrors BROWSER_ONLY in nas-server/server.js. The machine that holds the disk
+   can decode JPEG/PNG/WebP/GIF/BMP but not HEIC or camera RAW; the browser often
+   can. So when the box refuses to make a cover, these are the ONLY formats worth
+   re-fetching at full size - for anything else a refusal means the file itself is
+   damaged and the original would just be megabytes of the same broken picture. */
+var BROWSER_ONLY = /\.(heic|heif|dng|cr2|cr3|nef|arw|raf|orf|rw2|srw|pef)$/i;
+
 /* ----------------------------------------------------------------- preview */
 
 var PREVIEWABLE = { image: 1, video: 1, audio: 1, text: 1, pdf: 1, word: 1, ppt: 1, xls: 1 };
@@ -451,21 +458,47 @@ function checkDisk() {
 
 /* -------------------------------------------------------------- thumbnails
 
-   The rule, as the user stated it: ONE thumbnail downloads at a time. Twenty
-   <img> tags aimed at twenty originals on a ~1.6 MB/s link do not arrive in
-   order - they interleave, saturate the pipe, and a file can sit half-read
-   while the list already looks finished. So:
-     - every row paints its drawn type icon immediately, costing zero requests
-     - an IntersectionObserver promotes a row into the queue as it scrolls in
-     - the pump serves the queue strictly one at a time, top of the list first
-     - a row that scrolls back out before its turn is dropped again
-   Net effect: what you are looking at is what is downloading.                 */
+   THE RULE, and it is the whole design: every row that has a cover WILL get
+   one, in document order, all the way to the bottom of the folder, without the
+   user having to keep scrolling and without anybody needing to know which rows
+   happen to be on screen.
 
+   The old engine was built the other way round. A row only entered the queue
+   when an IntersectionObserver said "this one is visible", and the only thing
+   that ever looked further ahead was the enqueue path itself. So the frontier
+   was pinned to the deepest row ever seen plus a fixed look-ahead, no matter
+   that background downloading was switched on. Scroll 15 rows in and stop, and
+   the count froze at 15 for ever - exactly what the user reported.
+
+   The new engine keeps an explicit ordered registry of every thumbnail row and
+   walks it with ONE cursor:
+     - every row paints its drawn type icon immediately, costing zero requests
+     - the observer only RECORDS visibility (it feeds the status text), and in
+       "只下載看得到的" mode it is what admits a row to the queue at all
+     - driveThumbs() is the single driver. It tops the queue up to
+       parallel x WINDOW rows from the cursor onwards, and when the cursor
+       reaches the last loaded row it pulls the next page of the folder and
+       carries straight on
+     - a completed fetch, a page arriving, a settings change and an observer
+       callback all do the same thing: call driveThumbs() again
+   One driver, one cursor, one direction: down.                                */
+
+var thumbRows = [];        /* every row that should carry a cover, document order */
+var thumbCursor = 0;       /* how far down thumbRows[] the sweep has reached      */
 var thumbQueue = [];
 var thumbRunning = 0;
 var thumbObserver = null;
-var thumbsDone = 0;
-var thumbsTotal = 0;
+var thumbGen = 0;          /* resetThumbs() bumps it; fetches from the old folder bail */
+var thumbsDone = 0;        /* rows needing no cover, plus covers already settled   */
+var thumbsTotal = 0;       /* rows created so far - grows as further pages arrive  */
+
+/* How many rows beyond the parallel slots to keep queued. Three screens' worth
+   is enough that a fast scroll never catches an empty queue, and small enough
+   that leaving a folder does not strand a long tail of orphans. */
+var THUMB_WINDOW = 3;
+/* Consecutive failed page loads. Stops the sweep from hammering a broken
+   listing request once per completed thumbnail. */
+var moreFails = 0;
 
 /* Three at a time by default. The user originally asked for one-at-a-time
    because twenty 300 KB originals were interleaving and leaving half-read files.
@@ -479,22 +512,37 @@ function thumbParallel() {
 }
 
 function resetThumbs() {
+  thumbGen++;                        /* anything already in flight is now stale */
+  thumbRows = [];
+  thumbCursor = 0;
   thumbQueue.length = 0;
   thumbRunning = 0;
   thumbsDone = 0;
   thumbsTotal = 0;
+  moreFails = 0;
   if (thumbObserver) { thumbObserver.disconnect(); thumbObserver = null }
   var m = $('more');
-  if (m) m.classList.add('hidden');
+  if (m) { m.classList.add('hidden'); m.textContent = ''; }
   var b = $('progbar');
   if (b) b.classList.add('hidden');
 }
 
+/* Called by buildRow for every row it creates, in document order.
+   thumbsTotal is incremented HERE and nowhere else: exactly one increment per
+   row, so thumbsDone can never outrun it. The old engine also seeded the total
+   with the folder's file count and then incremented again inside the queue,
+   which is why the bar used to stall in the nineties and could never finish. */
+function trackThumbRow(li) {
+  thumbRows.push(li);
+  thumbsTotal++;
+}
+
 function watchThumbs() {
   var rows = document.querySelectorAll('#list li[data-thumb]:not([data-done])');
-  if (!rows.length) return;
-  if (!('IntersectionObserver' in window)) {           /* old browser: no laziness available */
-    Array.prototype.forEach.call(rows, enqueueThumb);
+  if (!rows.length) { driveThumbs(); return; }
+  if (!('IntersectionObserver' in window)) {          /* old browser: no laziness available */
+    Array.prototype.forEach.call(rows, function (li) { li.dataset.visible = '1'; });
+    driveThumbs();
     return;
   }
   if (!thumbObserver) {
@@ -503,82 +551,155 @@ function watchThumbs() {
         var li = entries[i].target;
         if (entries[i].isIntersecting) {
           li.dataset.visible = '1';
-          enqueueThumb(li);
         } else {
           li.dataset.visible = '';
-          dropThumb(li);
+          /* In "只下載看得到的" mode a row that scrolls away before its turn
+             gives its slot back to whatever is actually on screen. In the
+             normal mode it keeps its place - the sweep is going to reach it
+             anyway, and dropping and re-fetching it would just be churn. */
+          if (!SETTINGS.autoPreload) dropThumb(li);
         }
       }
+      driveThumbs();
     }, { rootMargin: '320px 0px' });                 /* start a bit before it is on screen */
   }
   Array.prototype.forEach.call(rows, function (li) { thumbObserver.observe(li); });
+  driveThumbs();
 }
 
-/* Rows BELOW what you are looking at keep downloading without waiting for a
-   scroll. The user asked for exactly that, and a 3 KB request is far too cheap
-   to hold back. Preloaded rows are never dropped, so the download runs to the
-   end of the folder on its own.
+/* ------------------------------------------------------- the one driver ---
 
-   Switchable from the settings screen on the NAS box: on a metered connection
-   the user may prefer it to stop at what is actually on screen. */
-var PRELOAD_AHEAD = 12;
+   Everything funnels through here. It is deliberately cheap and idempotent to
+   call: it walks the registry from the cursor, hands the next rows to the
+   queue, and when it runs off the end of what is loaded it asks for more of the
+   folder. Nothing else in this file decides what downloads next.
 
-function preloadAhead(li) {
-  if (!SETTINGS.autoPreload) return;
-  var n = li;
-  for (var k = 0; k < PRELOAD_AHEAD; k++) {
-    n = n.nextElementSibling;
-    if (!n || !n.dataset.thumb || n.dataset.done || n.dataset.queued) continue;
-    n.dataset.queued = '1';
-    thumbQueue.push(n);
-    thumbsTotal++;
+   Background downloading is the default and is switchable from the settings
+   screen on the NAS box, so a metered connection can be told to stop at what is
+   actually on screen. */
+
+/* Next row at or after the cursor that still needs a cover. Returns null when
+   everything loaded so far is settled or already queued. The cursor only moves
+   forward, and only past rows that are genuinely finished with - a row that is
+   merely waiting in the queue keeps its position so it is not skipped. */
+function nextThumbRow() {
+  while (thumbCursor < thumbRows.length) {
+    var r = thumbRows[thumbCursor];
+    if (!r.isConnected || r.dataset.done === '1' || r.dataset.queued === '1') { thumbCursor++; continue; }
+    return r;
   }
+  return null;
 }
 
+function driveThumbs() {
+  if (!SETTINGS.autoPreload) {
+    /* "只下載看得到的": the sweep is not allowed to run ahead of the screen, so
+       serve exactly the rows the observer has marked as visible. Anything the
+       sweep had already queued ahead of the screen is given back, which is what
+       makes switching this on mid-folder take effect at once. */
+    for (var q = thumbQueue.length - 1; q >= 0; q--) {
+      if (thumbQueue[q].dataset.visible !== '1') { thumbQueue[q].dataset.queued = ''; thumbQueue.splice(q, 1); }
+    }
+    for (var v = 0; v < thumbRows.length; v++) {
+      if (thumbRows[v].dataset.visible === '1') enqueueThumb(thumbRows[v]);
+    }
+    paintThumbs();
+    pumpThumbs(thumbParallel());
+    return;
+  }
+
+  /* Keep at most parallel x THUMB_WINDOW covers in flight-or-waiting, taken
+     strictly in document order - top of the list first, always. */
+  var budget = Math.max(1, thumbParallel() * THUMB_WINDOW);
+  while (thumbQueue.length + thumbRunning < budget) {
+    var row = nextThumbRow();
+    if (row) { enqueueThumb(row); thumbCursor++; continue; }
+    /* Nothing left loaded that still needs work. If the folder has further pages
+       and the last attempt did not fail, pull one; it comes back through
+       appendFiles -> watchThumbs -> driveThumbs, so the sweep resumes itself. */
+    if (listHasMore && !listBusy && moreFails < 2) loadMore();
+    break;
+  }
+  paintThumbs();
+  pumpThumbs(thumbParallel());
+}
+
+/* Pure bookkeeping. It does not fetch and it does not re-enter the driver, so
+   the driver stays the only thing that decides what happens next. */
 function enqueueThumb(li) {
-  if (li.dataset.done || li.dataset.queued) return;
+  if (!li || li.dataset.done === '1' || li.dataset.queued === '1') return;
   li.dataset.queued = '1';
   thumbQueue.push(li);
-  thumbsTotal++;
-  paintThumbs();
-  pumpThumbs();
-  preloadAhead(li);
 }
 
 function dropThumb(li) {
-  if (li.dataset.done || !li.dataset.queued) return;
+  if (!li || li.dataset.done === '1' || li.dataset.queued !== '1') return;
   var i = thumbQueue.indexOf(li);
-  if (i >= 0) { thumbQueue.splice(i, 1); li.dataset.queued = ''; paintThumbs(); }
+  if (i >= 0) { thumbQueue.splice(i, 1); li.dataset.queued = ''; }
 }
 
-function pumpThumbs() {
-  var par = thumbParallel();
-  while (thumbRunning < par && thumbQueue.length) {
-    /* Whatever is actually on screen goes first, even when it joined the queue
-       behind a backlog of preloads. */
-    var idx = 0;
-    for (var i = 0; i < thumbQueue.length; i++) {
-      if (thumbQueue[i].dataset.visible === '1') { idx = i; break; }
-    }
-    var li = thumbQueue.splice(idx, 1)[0];
-    if (!li.isConnected) continue;
-    li.dataset.queued = '';
-    if (li.dataset.done) continue;
+function pumpThumbs(par) {
+  var n = par || thumbParallel();
+  while (thumbRunning < n && thumbQueue.length) {
+    var li = thumbQueue.shift();
+    if (!li.isConnected || li.dataset.done === '1') { li.dataset.queued = ''; continue; }
     thumbRunning++;
-    fetchThumb(li, function () { thumbRunning--; pumpThumbs(); });
+    /* dataset.queued stays set for the whole flight, so the cursor can never
+       hand the same row out twice while its request is still open. It is the
+       completion callback below that clears it. */
+    fetchThumb(li, thumbGen, function () {
+      li.dataset.queued = '';
+      /* Clamped. A completion arriving after the folder changed used to be able
+         to drive this negative, which made the pump believe it had free slots it
+         did not have - and then the queue simply stopped moving. */
+      thumbRunning = Math.max(0, thumbRunning - 1);
+      paintThumbs();
+      driveThumbs();
+    });
   }
+  paintThumbs();
 }
 
-function fetchThumb(li, next) {
+function fetchThumb(li, gen, next) {
   var kind = li.dataset.kind, rel = li.dataset.thumb, box = li.querySelector('.ico');
   var settled = false;
-  var settle = function (swapped) {
+  var timer = null;
+  var bail = null;                       /* object URL to release if we stand down */
+
+  var settle = function () {
     if (settled) return;
     settled = true;
+    if (timer) { clearTimeout(timer); timer = null; }
+    /* The user changed folder or refreshed while this was still in flight. The
+       row is detached and the counters already belong to the next folder, so
+       touching any of them now would corrupt the new numbers. Give the slot
+       back and leave quietly. */
+    if (gen !== thumbGen) {
+      if (bail) { try { URL.revokeObjectURL(bail); } catch (e) { } }
+      next();
+      return;
+    }
+    /* A row is marked done whether the cover arrived or not, so a file the NAS
+       box cannot render (corrupt JPEG, ffmpeg missing and no video decoder) is
+       attempted once instead of being retried on every sweep. */
     li.dataset.done = '1';
     thumbsDone++;
     paintThumbs();
     next();
+  };
+
+  /* A request that never comes back must not hold one of the parallel slots for
+     ever - that is what made the count sit still at 15 instead of advancing. */
+  timer = setTimeout(function () { settle(); }, 25000);
+
+  /* A row whose cover could not be made - the file is damaged, or it is a format
+     neither the box nor this browser can decode. Marked rather than left blank:
+     an empty square that never fills in looks like the app is still working on
+     it, and the user's whole complaint was not being able to tell what had
+     actually loaded. Costs no requests. */
+  var noCover = function () {
+    li.dataset.nocover = '1';
+    li.title = '封面做不出來：這個檔案可能已損壞，或者瀏覽器不支援這個格式';
   };
 
   if (kind === 'image' || kind === 'video') {
@@ -589,27 +710,39 @@ function fetchThumb(li, next) {
     var img = new Image();
     img.alt = '';
     var usedVideoFallback = false;
-    img.onload = function () { if (!settled) { box.textContent = ''; box.appendChild(img); } settle(true); };
+    img.onload = function () { if (!settled) { box.textContent = ''; box.appendChild(img); } settle(); };
     img.onerror = function () {
       if (kind === 'video' && !usedVideoFallback) {
         /* No ffmpeg on the box: fall back to letting the browser decode a frame.
-           Slow, but a cover beats an icon. */
+           Slow, but a cover beats an icon. preload='metadata' means only the
+           header is fetched, so this stays cheap even for a huge movie. */
         usedVideoFallback = true;
         var v = document.createElement('video');
         v.muted = true; v.playsInline = true; v.preload = 'metadata';
         v.onloadeddata = function () { try { v.currentTime = 0.1; } catch (e) { } };
-        v.onseeked = function () { if (!settled) { box.textContent = ''; box.appendChild(v); } settle(true); };
-        v.onerror = function () { settle(false); };
+        v.onseeked = function () { if (!settled) { box.textContent = ''; box.appendChild(v); } settle(); };
+        v.onerror = function () { noCover(); settle(); };
         v.src = rawUrl(rel);
-        setTimeout(function () { settle(false); }, 12000);
         return;
       }
-      img.onerror = function () { settle(false); };
-      img.src = rawUrl(rel);
+      /* The box refused. For the formats it cannot read at all (HEIC, camera
+         RAW) the browser may still manage, so try the original once. For
+         everything else - .jpg/.png/.webp, formats the box certainly can read -
+         a refusal means the FILE is damaged, and re-fetching the whole thing
+         would only end at the same broken-image icon after megabytes of
+         traffic. Measured on the real box: 25 damaged PNGs, 2.5 s and up to
+         2.4 MB each, all for nothing. */
+      if (kind === 'image' && BROWSER_ONLY.test(rel)) {
+        img.onerror = function () { noCover(); settle(); };
+        img.src = rawUrl(rel);
+        return;
+      }
+      noCover();
+      settle();
     };
     img.src = thumbUrl(rel);
   } else {
-    settle(false);
+    settle();
   }
 }
 
@@ -619,16 +752,23 @@ function paintThumbs() {
     if (!thumbsTotal) { bar.classList.add('hidden'); }
     else {
       bar.classList.remove('hidden');
-      var pct = Math.round(thumbsDone / thumbsTotal * 100);
+      /* thumbsDone can never exceed thumbsTotal now (see trackThumbRow), so 100%
+         is genuinely reachable and the bar cannot read 107%. The trailing "+"
+         says the folder still has pages to come, so the total will keep growing. */
+      var pct = Math.max(0, Math.min(100, Math.round(thumbsDone / thumbsTotal * 100)));
       $('progbarIn').style.width = pct + '%';
-      $('progbarTxt').textContent = '已加載 ' + thumbsDone + ' / ' + thumbsTotal + '　' + pct + '%' +
+      $('progbarTxt').textContent = '已加載 ' + thumbsDone + ' / ' + thumbsTotal +
+        (listHasMore ? '+' : '') + '　' + pct + '%' +
         (thumbRunning ? '　（同時 ' + thumbRunning + ' 個）' : '');
     }
   }
+  /* This one line under the list is written here and nowhere else, so a page
+     load in flight can never be reported by two writers fighting each other. */
   if (more) {
-    if (!thumbsTotal) { more.classList.add('hidden'); return; }
-    more.classList.remove('hidden');
-    more.textContent = '';
+    if (!thumbsTotal) { more.classList.add('hidden'); more.textContent = ''; }
+    else if (listBusy) { more.classList.remove('hidden'); more.textContent = '載入中…'; }
+    else if (listHasMore) { more.classList.remove('hidden'); more.textContent = '下面還有，會自動繼續載入'; }
+    else { more.classList.add('hidden'); more.textContent = ''; }
   }
 }
 
@@ -725,6 +865,7 @@ function load(p) {
   listOffset = 0;
   listHasMore = false;
   listBusy = true;
+  moreFails = 0;                     /* a brand new folder gets a clean slate */
   resetThumbs();
   showSkeleton();
   return req('GET', '/api/list?path=' + encodeURIComponent(p) + '&limit=' + PAGE + '&offset=0')
@@ -746,34 +887,49 @@ function load(p) {
       li.textContent = '讀取失敗：' + e.message;
       ul.appendChild(li);
     })
-    .finally(function () { hideSkeleton(); listBusy = false; checkDisk(); paintThumbs(); });
+    .finally(function () {
+      hideSkeleton();
+      listBusy = false;
+      checkDisk();
+      paintThumbs();
+      /* The list may be taller than the window on a wide screen, in which case
+         the whole folder is already in the DOM and the sweep should just run. */
+      driveThumbs();
+    });
 }
 
 function loadMore() {
   if (listBusy || !listHasMore) return;
   listBusy = true;
-  var el = $('more');
-  var was = el.textContent;
-  el.classList.remove('hidden');
-  el.textContent = '載入中…';
+  paintThumbs();                     /* the single writer turns this into 載入中… */
   req('GET', '/api/list?path=' + encodeURIComponent(cwd) + '&limit=' + PAGE + '&offset=' + listOffset)
     .then(function (d) {
+      moreFails = 0;
       listHasMore = !!d.hasMore;
       listOffset += (d.files || []).length;
       appendFiles(d.files || []);
     })
-    .catch(function (e) { toast(e.message, true); el.textContent = was; })
-    .finally(function () { listBusy = false; paintThumbs(); });
+    .catch(function (e) {
+      /* Two failures in a row and the automatic sweep stands down, so a broken
+         request is not retried once per completed thumbnail. Scrolling to the
+         bottom on purpose still triggers a fresh attempt. */
+      moreFails++;
+      toast(e.message, true);
+    })
+    .finally(function () { listBusy = false; paintThumbs(); driveThumbs(); });
 }
 
 /* Pull the next page a screen early so the user never lands on an empty bottom. */
 var scrollArmed = false;
 window.addEventListener('scroll', function () {
-  if (scrollArmed || listBusy || !listHasMore) return;
+  if (scrollArmed || !listHasMore) return;
   scrollArmed = true;
   requestAnimationFrame(function () {
     scrollArmed = false;
-    if (window.innerHeight + window.pageYOffset >= document.body.offsetHeight - 600) loadMore();
+    if (window.innerHeight + window.pageYOffset >= document.body.offsetHeight - 600) {
+      moreFails = 0;                 /* a deliberate scroll forgives earlier failures */
+      loadMore();
+    }
   });
 }, { passive: true });
 
@@ -829,23 +985,24 @@ function renderList(d) {
     return;
   }
 
-  /* The counter covers the DIRECT children of the folder you are looking at and
-     nothing else: 20 photos plus 5 sub-folders reads as "25". Whatever lives
-     inside those 5 sub-folders is not counted, and is not walked either. */
-  thumbsTotal = dirs.length + (d.totalFiles != null ? d.totalFiles : files.length);
+  /* thumbsTotal is owned by trackThumbRow() alone - one increment per row
+     created, nothing else. The old engine also seeded it with the folder's total
+     file count and then incremented it again inside the queue, so the denominator
+     was inflated and 100% was unreachable. */
+  thumbsTotal = 0;
   thumbsDone = 0;
 
   dirs.forEach(function (it, idx) {
     var li = buildRow(it, idx);
     li.dataset.done = '1';                 /* a folder has no thumbnail to fetch */
-    thumbsDone++;
     ul.appendChild(li);
+    thumbsDone++;
   });
 
   files.forEach(function (it, idx) {
     var li = buildRow(it, idx);
-    if (!li.dataset.thumb) { li.dataset.done = '1'; thumbsDone++; }   /* Word/PDF use an icon */
     ul.appendChild(li);
+    if (!li.dataset.thumb) { li.dataset.done = '1'; thumbsDone++; }   /* Word/PDF use an icon */
   });
 
   watchThumbs();
@@ -857,8 +1014,8 @@ function appendFiles(files) {
   var ul = $('list');
   (files || []).forEach(function (it, idx) {
     var li = buildRow(it, idx);
-    if (!li.dataset.thumb) { li.dataset.done = '1'; thumbsDone++; }
     ul.appendChild(li);
+    if (!li.dataset.thumb) { li.dataset.done = '1'; thumbsDone++; }
   });
   watchThumbs();
   paintThumbs();
@@ -934,6 +1091,11 @@ function buildRow(it, idx) {
       }));
       li.appendChild(acts);
     }
+
+    /* Registered here rather than in the callers, so that no future code path can
+       create a row without the sweep knowing about it. Document order == the
+       order rows are created, which is the order the sweep must follow. */
+    trackThumbRow(li);
 
     return li;
   }
@@ -1190,10 +1352,14 @@ function absorbSettings(d) {
   cacheSettings();
 }
 
-/* Single place where a setting turns into behaviour. Today every row is read on
-   demand (thumbEdge / thumbParallel / preloadAhead), so there is nothing to push
-   into the DOM - but a future setting that needs it hooks in here. */
-function applySettings() { /* no-op placeholder for settings that paint themselves */ }
+/* Single place where a setting turns into behaviour. All three settings are read
+   live (thumbEdge / thumbParallel / autoPreload), so there is nothing to push
+   into the DOM - but the sweep has to be told to re-plan. Without this, changing
+   "同時下載縮圖" or "背景自動下載" would only take effect after leaving and
+   re-entering the folder, which looks exactly like the setting did not save. */
+function applySettings() {
+  driveThumbs();
+}
 
 /* Read the shared settings from the NAS box. Called as the FIRST request after
    a refresh AND after a password is accepted. */

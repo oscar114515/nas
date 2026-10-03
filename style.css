@@ -359,7 +359,7 @@ ul.wx-list.loading li.skel {
    on every platform and reads as decoration rather than as a file type.       */
 
 ul.wx-list li .ico {
-  flex: none; width: 38px; height: 38px;
+  flex: none; width: 38px; height: 38px; position: relative;
   display: flex; align-items: center; justify-content: center;
   border-radius: 7px; overflow: hidden;
   background: var(--panel2);
@@ -379,6 +379,19 @@ ul.wx-list li .ico.t-audio { background: #f3ecfd; color: #6b3fc4; }
 ul.wx-list li .ico.t-video { background: #e9f2fd; color: #1f6fb2; }
 ul.wx-list li .ico.t-zip   { background: #fdf3e2; color: #a3701a; }
 ul.wx-list li .ico.t-dir   { background: #fdf3e2; color: #c08a1e; }
+
+/* A cover the box could not produce: the file is damaged, or it is a format
+   neither the box nor the browser can decode. Drawn, never requested - the row
+   says so instead of showing an empty square that looks like it is still
+   loading. The title on the row spells it out. */
+ul.wx-list li[data-nocover] .ico svg { opacity: .4 }
+ul.wx-list li[data-nocover] .ico::after {
+  content: '!'; position: absolute; right: 1px; bottom: 1px;
+  width: 14px; height: 14px; border-radius: 50%;
+  background: var(--red, #d9483d); color: #fff;
+  font: 700 10px/14px -apple-system, "Segoe UI", "Microsoft JhengHei", sans-serif;
+  text-align: center;
+}
 
 /* Row-by-row fade belongs to first paint and manual refresh only. A page turn
    sets this class, otherwise it stacks on top of the slide and the transition
