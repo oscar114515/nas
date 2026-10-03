@@ -1,14 +1,40 @@
+/* =============================================================================
+   Oscar NAS - WeChat-flavoured UI.
+
+   Design tokens come from the official WeChat / WeUI spec:
+     brand green   #07C160   (hover #10B160, pressed #059050)
+     page canvas   #EDEDED   <- NOT white; WeChat never uses a pure-white canvas
+     surface       #FFFFFF
+     separator     #E5E5E5
+     ink           #1A1A1A / #888888 / #B2B2B2
+     link blue     #576B95
+     danger red    #FA5151
+     pressed row   #ECECEC
+   Rules I deliberately follow, because they are what makes WeChat look like
+   WeChat and not like a generic Material template:
+     - 4px corner radius, never more
+     - 44px+ row / button height
+     - NO drop shadows, NO gradients on surfaces, NO pill buttons
+     - a tap colours the WHOLE row grey; WeChat has no ripple
+     - motion is short (150-240ms) and directional, like turning a page
+   ========================================================================== */
+
 :root {
-  --bg: #0f1115;
-  --panel: #161a21;
-  --panel2: #1c222b;
-  --line: #262d38;
-  --text: #e6e8ee;
-  --dim: #8b93a7;
-  --accent: #4c8dff;
-  --danger: #e2544a;
-  --ok: #35b37e;
-  --radius: 10px;
+  --green: #07C160;
+  --green-hi: #10B160;
+  --green-lo: #059050;
+  --page: #ededed;
+  --surface: #ffffff;
+  --surface-2: #f7f7f7;
+  --line: #e5e5e5;
+  --line-2: #e0e0e0;
+  --ink: #1a1a1a;
+  --ink-2: #888888;
+  --ink-3: #b2b2b2;
+  --link: #576b95;
+  --press: #ececec;
+  --red: #fa5151;
+  --r: 4px;
 }
 
 * { box-sizing: border-box; }
@@ -16,370 +42,276 @@
 html, body {
   margin: 0;
   padding: 0;
-  background: var(--bg);
-  color: var(--text);
-  font: 15px/1.5 -apple-system, "Segoe UI", "Microsoft JhengHei", "PingFang HK", sans-serif;
+  background: var(--page);
+  color: var(--ink);
+  font: 15px/1.5 -apple-system, BlinkMacSystemFont, "Segoe UI", "Microsoft JhengHei",
+        "PingFang HK", "Helvetica Neue", Helvetica, Arial, sans-serif;
   -webkit-text-size-adjust: 100%;
+  -webkit-tap-highlight-color: transparent;
 }
 
 button, input, select { font: inherit; color: inherit; }
 
 .hidden { display: none !important; }
 
-/* ---------- login ---------- */
+/* ------------------------------------------------------------------ top bar
+   WeChat shows a hairline progress bar at the very top while loading.
+   No spinner, no floating card, no dimmed overlay.                          */
 
-#login {
-  min-height: 100vh;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  padding: 24px;
+#topbar {
+  position: fixed; top: 0; left: 0; right: 0;
+  height: 2px; z-index: 90;
+  background: rgba(7, 193, 96, .12);
+  opacity: 0; pointer-events: none;
+}
+#topbar.on { opacity: 1; }
+#topbar i {
+  display: block; height: 100%; width: 0;
+  background: var(--green);
+  transition: width .55s cubic-bezier(.2, .8, .3, 1), opacity .28s ease .12s;
 }
 
-.card {
-  width: 100%;
-  max-width: 360px;
-  background: var(--panel);
-  border: 1px solid var(--line);
-  border-radius: 14px;
-  padding: 28px 24px;
+/* ------------------------------------------------------------------- navbar */
+
+.wx-nav {
+  position: sticky; top: 0; z-index: 20;
+  display: flex; align-items: center; gap: 6px;
+  height: 48px; padding: 0 8px;
+  background: var(--surface-2);
+  border-bottom: 1px solid var(--line);
 }
-
-.card h1 {
-  margin: 0 0 4px;
-  font-size: 20px;
-  font-weight: 600;
-  letter-spacing: .5px;
+.wx-nav h1 {
+  flex: 1; min-width: 0; margin: 0;
+  font-size: 17px; font-weight: 600; text-align: center;
+  letter-spacing: .2px;
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
 }
-
-.card p.sub {
-  margin: 0 0 22px;
-  color: var(--dim);
-  font-size: 13px;
+.wx-nav-act {
+  flex: none; min-width: 54px;
+  height: 34px; padding: 0 10px;
+  background: transparent; border: none; border-radius: var(--r);
+  color: var(--link); font-size: 15px;
+  cursor: pointer;
+  transition: background-color .12s ease, opacity .12s ease;
 }
-
-.field { margin-bottom: 14px; }
-
-.field label {
-  display: block;
-  font-size: 12px;
-  color: var(--dim);
-  margin-bottom: 6px;
+.wx-nav-act:active { background: var(--press); }
+.wx-nav-act.right { text-align: right; }
+.wx-back {
+  flex: none; min-width: 54px;
+  display: inline-flex; align-items: center; gap: 1px;
+  height: 34px; padding: 0 10px 0 0;
+  border: none; border-radius: var(--r);
+  background: transparent;
+  color: var(--link); font-size: 15px;
+  cursor: pointer;
+  transition: background-color .12s ease, opacity .12s ease;
 }
+.wx-back:active { background: var(--press); }
+.wx-back[disabled] { opacity: .28; cursor: default; background: transparent; }
+.wx-back .chev { font-size: 21px; line-height: 1; margin-top: -3px; }
 
-.field input {
-  width: 100%;
-  padding: 11px 12px;
-  background: var(--panel2);
-  border: 1px solid var(--line);
-  border-radius: var(--radius);
-  outline: none;
+/* ------------------------------------------------------------------- login */
+
+#login { min-height: 100vh; background: var(--page); }
+
+.wx-card {
+  margin: 28px 16px;
+  background: var(--surface);
+  border-radius: var(--r);
+  overflow: hidden;
 }
+.wx-card .lead { padding: 24px 20px 4px; }
+.wx-card .lead h1 { margin: 0 0 6px; font-size: 20px; font-weight: 600; }
+.wx-card .lead p { margin: 0; color: var(--ink-2); font-size: 13px; }
 
-.field input:focus { border-color: var(--accent); }
+.wx-cell {
+  position: relative;
+  display: flex; align-items: center;
+  min-height: 52px;
+  padding: 0 16px;
+  border-bottom: 1px solid var(--line);
+  transition: background-color .12s ease;
+}
+.wx-cell > label { flex: none; color: var(--ink); font-size: 15px; }
+.wx-cell input {
+  flex: 1; min-width: 0;
+  margin-left: 14px; padding: 15px 0;
+  background: transparent; border: none; outline: none;
+  font-size: 16px; letter-spacing: .6px;
+}
+.wx-cell input::placeholder { color: var(--ink-3); letter-spacing: 0; }
+.wx-cell:focus-within { background: var(--surface-2); }
+
+.wx-eye {
+  flex: none;
+  height: 30px; padding: 0 10px; margin-left: 8px;
+  background: transparent;
+  border: 1px solid var(--line-2); border-radius: var(--r);
+  color: var(--ink-2); font-size: 13px;
+  cursor: pointer;
+  transition: background-color .12s ease, color .12s ease, border-color .12s ease;
+}
+.wx-eye:active { background: var(--press); }
+
+.wx-err { min-height: 20px; padding: 12px 20px 0; color: var(--red); font-size: 13px; }
+.wx-err.show { animation: wxShake .34s ease; }
+@keyframes wxShake {
+  10%, 90% { transform: translateX(-1px); }
+  30%, 70% { transform: translateX(3px); }
+  50%      { transform: translateX(-3px); }
+}
+.wx-card .pad { padding: 20px; }
+
+/* ------------------------------------------------------------------ buttons */
 
 .btn {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  gap: 6px;
-  padding: 10px 14px;
-  background: var(--panel2);
-  border: 1px solid var(--line);
-  border-radius: var(--radius);
-  cursor: pointer;
-  white-space: nowrap;
-  user-select: none;
+  position: relative; overflow: hidden;
+  display: inline-flex; align-items: center; justify-content: center; gap: 5px;
+  min-height: 40px; padding: 0 16px;
+  background: var(--surface);
+  border: 1px solid var(--line-2); border-radius: var(--r);
+  color: var(--ink); font-size: 15px;
+  cursor: pointer; white-space: nowrap; user-select: none;
+  transition: background-color .13s ease, border-color .13s ease,
+              color .13s ease, opacity .13s ease;
 }
-
-.btn:hover { border-color: #38414f; }
-.btn:active { transform: translateY(1px); }
-.btn[disabled] { opacity: .45; cursor: default; }
+.btn:hover { border-color: #cfcfcf; }
+.btn:active { background: var(--press); }
+.btn:focus-visible { outline: 2px solid var(--green); outline-offset: 1px; }
+.btn[disabled] { opacity: .5; cursor: default; }
 
 .btn.primary {
-  width: 100%;
-  background: var(--accent);
-  border-color: var(--accent);
-  color: #fff;
-  font-weight: 500;
-  padding: 12px;
+  width: 100%; min-height: 48px;
+  background: var(--green); border-color: var(--green);
+  color: #fff; font-size: 16px; font-weight: 500;
 }
+.btn.primary:hover { background: var(--green-hi); border-color: var(--green-hi); }
+.btn.primary:active { background: var(--green-lo); border-color: var(--green-lo); }
 
-.btn.icon { padding: 6px 9px; font-size: 13px; }
-.btn.danger { color: var(--danger); }
+.btn.icon { min-height: 30px; padding: 0 9px; font-size: 13px; color: var(--link); }
+.btn.icon:hover { border-color: transparent; }
+.btn.icon:active { background: var(--press); }
+.btn.danger { color: var(--red); }
+.btn.link { background: transparent; border: none; color: var(--link); }
+.btn.link:hover { border-color: transparent; }
+.btn.link:active { background: var(--press); }
 
-.err {
-  margin-top: 14px;
-  color: var(--danger);
-  font-size: 13px;
-  min-height: 18px;
-}
-
-/* ---------- app shell ---------- */
-
-header {
-  position: sticky;
-  top: 0;
-  z-index: 5;
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  padding: 12px 16px;
-  background: rgba(15, 17, 21, .92);
-  backdrop-filter: blur(8px);
-  border-bottom: 1px solid var(--line);
-  flex-wrap: wrap;
-}
-
-header .brand { font-weight: 600; font-size: 15px; white-space: nowrap; }
-
-header .disk {
-  font-size: 12px;
-  color: var(--dim);
-  border: 1px solid var(--line);
-  border-radius: 999px;
-  padding: 3px 10px;
-  white-space: nowrap;
-}
-
-header .spacer { flex: 1; }
-
-main { padding: 12px 16px 96px; max-width: 960px; margin: 0 auto; }
-
-.crumbs {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: 2px;
-  font-size: 13px;
-  margin-bottom: 12px;
-  color: var(--dim);
-  word-break: break-all;
-}
-
-.crumbs a { color: var(--accent); cursor: pointer; text-decoration: none; }
-.crumbs a:hover { text-decoration: underline; }
-.crumbs span.sep { opacity: .5; padding: 0 2px; }
-
-.toolbar {
-  display: flex;
-  gap: 8px;
-  flex-wrap: wrap;
-  margin-bottom: 14px;
-}
-
-ul.list {
-  list-style: none;
-  margin: 0;
-  padding: 0;
-  border: 1px solid var(--line);
-  border-radius: var(--radius);
-  overflow: hidden;
-  background: var(--panel);
-}
-
-ul.list li {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  padding: 10px 12px;
-  border-bottom: 1px solid var(--line);
-}
-
-ul.list li:last-child { border-bottom: none; }
-ul.list li:hover { background: var(--panel2); }
-
-.nm {
-  flex: 1;
-  min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-  cursor: pointer;
-}
-
-.nm.dir { color: var(--accent); font-weight: 500; }
-
-.meta { font-size: 12px; color: var(--dim); white-space: nowrap; }
-
-.acts { display: flex; gap: 4px; flex-shrink: 0; }
-
-.empty { padding: 28px 12px; text-align: center; color: var(--dim); font-size: 13px; }
-
-/* ---------- progress ---------- */
-
-#prog {
-  position: fixed;
-  left: 0; right: 0; bottom: 0;
-  background: var(--panel);
-  border-top: 1px solid var(--line);
-  padding: 10px 16px;
-  font-size: 13px;
-  z-index: 10;
-}
-
-#prog .bar { height: 4px; background: var(--panel2); border-radius: 2px; margin-top: 8px; overflow: hidden; }
-#prog .bar i { display: block; height: 100%; width: 0; background: var(--accent); transition: width .15s; }
-
-/* ---------- toast ---------- */
-
-#toast {
-  position: fixed;
-  left: 50%;
-  bottom: 28px;
-  transform: translateX(-50%);
-  background: #232a35;
-  border: 1px solid var(--line);
-  border-radius: 999px;
-  padding: 9px 18px;
-  font-size: 13px;
-  opacity: 0;
-  pointer-events: none;
-  transition: opacity .2s;
-  z-index: 20;
-  max-width: 90vw;
-  text-align: center;
-}
-
-#toast.on { opacity: 1; }
-#toast.err { border-color: var(--danger); color: #ffb4ae; }
-
-@media (max-width: 560px) {
-  .meta.size { display: none; }
-  main { padding: 10px 10px 96px; }
-  header { padding: 10px 12px; }
-}
-
-/* ==========================================================================
-   Motion & feedback layer
-   Rules of the house: nothing ever blocks input for longer than ~600 ms, and
-   EVERY tap produces a visible reaction within one frame (ripple), so the UI
-   never feels dead. Anything slow gets a spinner instead of a frozen screen.
-   ========================================================================== */
-
-/* One spinner to rule them all - sized by font-size, coloured by currentColor. */
 .spin {
   display: inline-block;
-  width: 1em; height: 1em;
-  flex: none;
-  border: 2px solid currentColor;
-  border-right-color: transparent;
-  border-radius: 50%;
-  vertical-align: -.125em;
-  animation: wbSpin .7s linear infinite;
+  width: 1em; height: 1em; flex: none;
+  border: 2px solid currentColor; border-right-color: transparent;
+  border-radius: 50%; vertical-align: -.125em;
+  animation: wxSpin .7s linear infinite;
 }
-.spin.lg { width: 34px; height: 34px; border-width: 3px; }
-
-@keyframes wbSpin { to { transform: rotate(360deg); } }
-
-/* ---- full-screen veil, only for first paint / whole-page work ---- */
-#busy {
-  position: fixed; inset: 0; z-index: 40;
-  display: flex; flex-direction: column;
-  align-items: center; justify-content: center; gap: 14px;
-  background: rgba(15, 17, 21, .58);
-  -webkit-backdrop-filter: blur(2px);
-  backdrop-filter: blur(2px);
-  opacity: 0; pointer-events: none;
-  transition: opacity .18s ease;
-  font-size: 13px; color: var(--dim);
-}
-#busy.on { opacity: 1; pointer-events: auto; }
-#busy .spin { color: var(--accent); }
-
-/* ---- buttons ---- */
-.btn {
-  position: relative;
-  overflow: hidden;
-  transition: transform .09s ease, background .15s ease,
-              border-color .15s ease, box-shadow .15s ease, opacity .15s ease;
-}
-.btn:hover:not([disabled]) { background: #232a35; border-color: #3a4453; }
-.btn.primary:hover:not([disabled]) { background: #5f9bff; border-color: #5f9bff; }
-.btn:active:not([disabled]) { transform: scale(.955); }
-.btn:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
-
-.btn.busy { pointer-events: none; opacity: .8; }
+@keyframes wxSpin { to { transform: rotate(360deg); } }
+.btn.busy { pointer-events: none; }
 .btn.busy > .lbl, .btn.busy > .ico { opacity: 0; }
-.btn > .lbl, .btn > .ico { transition: opacity .12s ease; }
-.btn .spin {
-  position: absolute; top: 50%; left: 50%;
-  margin: -.5em 0 0 -.5em;
-}
+.btn > .lbl, .btn > .ico { transition: opacity .1s ease; }
+.btn .spin { position: absolute; top: 50%; left: 50%; margin: -.5em 0 0 -.5em; }
 
-/* ---- ripple ---- */
-.ripple {
-  position: absolute; border-radius: 50%;
-  transform: scale(0); opacity: .3;
-  background: #fff; pointer-events: none;
-  animation: wbRip .55s ease-out forwards;
-}
-@keyframes wbRip { to { transform: scale(2.8); opacity: 0; } }
+/* ---------------------------------------------------------------------- app */
 
-/* ---- list entrance + skeleton ---- */
-ul.list li {
-  animation: wbRow .28s cubic-bezier(.2, .7, .3, 1) backwards;
-  animation-delay: calc(var(--i, 0) * 20ms);
-  transition: background .12s ease;
+main { padding: 0 0 96px; max-width: 660px; margin: 0 auto; }
+
+.wx-pathbar {
+  display: flex; align-items: center; gap: 10px;
+  padding: 0 16px;
 }
-@keyframes wbRow {
-  from { opacity: 0; transform: translateY(7px); }
+.wx-path {
+  flex: 1; min-width: 0;
+  display: flex; flex-wrap: wrap; align-items: center; gap: 2px;
+  padding: 10px 0;
+  color: var(--ink-2); font-size: 13px;
+  word-break: break-all;
+}
+.wx-disk { flex: none; color: var(--ink-2); font-size: 12px; padding: 10px 0; }
+.wx-path a { color: var(--link); cursor: pointer; text-decoration: none; }
+.wx-path a:active { opacity: .55; }
+.wx-path .sep { opacity: .45; padding: 0 1px; }
+
+.wx-toolbar { display: flex; gap: 8px; flex-wrap: wrap; padding: 0 16px 12px; }
+
+ul.wx-list {
+  list-style: none; margin: 0 16px; padding: 0;
+  background: var(--surface);
+  border-radius: var(--r);
+  overflow: hidden;
+}
+ul.wx-list li {
+  position: relative;
+  display: flex; align-items: center; gap: 10px;
+  min-height: 54px; padding: 9px 12px 9px 14px;
+  border-bottom: 1px solid var(--line);
+  background: var(--surface);
+  transition: background-color .11s ease;
+  animation: wxRow .22s cubic-bezier(.2, .7, .3, 1) backwards;
+  animation-delay: calc(var(--i, 0) * 16ms);
+}
+ul.wx-list li:last-child { border-bottom: none; }
+ul.wx-list li.tappable:active { background: var(--press); }
+@keyframes wxRow {
+  from { opacity: 0; transform: translateY(5px); }
   to   { opacity: 1; transform: none; }
 }
-ul.list.loading { background: transparent; border-color: transparent; }
-ul.list.loading li.skel {
-  height: 43px;
-  background: linear-gradient(90deg, var(--panel) 25%, var(--panel2) 37%, var(--panel) 63%);
+
+ul.wx-list li .ico { flex: none; width: 24px; text-align: center; font-size: 19px; line-height: 1; }
+ul.wx-list li .nm {
+  flex: 1; min-width: 0;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  font-size: 15px; color: var(--ink);
+}
+ul.wx-list li .sub { flex: none; color: var(--ink-2); font-size: 12px; white-space: nowrap; }
+ul.wx-list li .acts { flex: none; display: flex; gap: 2px; margin-left: 4px; }
+ul.wx-list li .chev { flex: none; color: var(--ink-3); font-size: 21px; line-height: 1; margin-left: 2px; }
+ul.wx-list li.empty, ul.wx-list li.skel { animation: none; }
+ul.wx-list li.empty { justify-content: center; color: var(--ink-2); font-size: 14px; padding: 32px 12px; }
+
+ul.wx-list.loading { background: transparent; }
+ul.wx-list.loading li.skel {
+  height: 54px;
+  background: linear-gradient(90deg, #f2f2f2 25%, #e8e8e8 37%, #f2f2f2 63%);
   background-size: 400% 100%;
-  animation: wbShimmer 1.25s ease-in-out infinite;
   border-bottom: none;
+  animation: wxSweep 1.3s ease-in-out infinite;
 }
-@keyframes wbShimmer { from { background-position: 100% 0; } to { background-position: 0 0; } }
-li.empty, li.skel { animation: none; }
+@keyframes wxSweep { from { background-position: 100% 0; } to { background-position: 0 0; } }
 
-/* ---- toast slides up instead of just fading ---- */
+/* ------------------------------------------------------------------ progress */
+
+#prog {
+  position: fixed; left: 0; right: 0; bottom: 0; z-index: 30;
+  background: var(--surface);
+  border-top: 1px solid var(--line);
+  padding: 10px 16px 12px;
+  font-size: 13px; color: var(--ink-2);
+}
+#prog .bar { height: 3px; margin-top: 8px; background: var(--line); border-radius: 2px; overflow: hidden; }
+#prog .bar i { display: block; height: 100%; width: 0; background: var(--green); transition: width .16s ease; }
+
+/* --------------------------------------------------------------------- toast */
+
 #toast {
-  transform: translate(-50%, 14px);
-  opacity: 0;
-  transition: opacity .2s ease, transform .24s cubic-bezier(.2, .8, .3, 1);
+  position: fixed; left: 50%; bottom: 32px; z-index: 40;
+  max-width: 82vw;
+  transform: translate(-50%, 12px);
+  padding: 11px 18px;
+  background: rgba(0, 0, 0, .78);
+  border-radius: var(--r);
+  color: #fff; font-size: 14px; text-align: center;
+  opacity: 0; pointer-events: none;
+  transition: opacity .18s ease, transform .22s cubic-bezier(.2, .8, .3, 1);
 }
-#toast.on { transform: translate(-50%, 0); }
+#toast.on { opacity: 1; transform: translate(-50%, 0); }
+#toast.err { background: rgba(250, 81, 81, .94); }
 
-/* ---- password field ---- */
-.field { position: relative; }
-.field input { transition: border-color .16s ease, box-shadow .16s ease, background .16s ease; }
-/* room for the reveal button on the right */
-#pw { padding-right: 64px; }
-.field input:focus {
-  border-color: var(--accent);
-  box-shadow: 0 0 0 3px rgba(76, 141, 255, .16);
-}
-.reveal {
-  position: absolute; right: 6px; bottom: 5px;
-  height: 30px; padding: 0 11px;
-  background: transparent;
-  border: 1px solid var(--line);
-  border-radius: 7px;
-  color: var(--dim);
-  font-size: 12px;
-  cursor: pointer;
-  transition: color .15s ease, border-color .15s ease, background .15s ease, transform .09s ease;
-}
-.reveal:hover { color: var(--text); border-color: #3a4453; background: var(--panel2); }
-.reveal:active { transform: scale(.94); }
-
-/* ---- error shake ---- */
-.err.show { animation: wbShake .34s ease; }
-@keyframes wbShake {
-  10%, 90% { transform: translateX(-1px); }
-  30%, 70% { transform: translateX(4px); }
-  50%      { transform: translateX(-4px); }
+@media (max-width: 560px) {
+  ul.wx-list { margin: 0 12px; }
+  .wx-toolbar { padding: 0 12px 12px; }
+  .wx-pathbar { padding: 0 12px; }
+  ul.wx-list li .sub.size { display: none; }
 }
 
-/* ---- disk chip dims while it is being measured ---- */
-header .disk.loading { opacity: .55; }
-
-/* ---- respect the OS "reduce motion" setting ---- */
+/* The OS asked for less motion: keep every state change, drop the travel. */
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after {
     animation-duration: .001ms !important;

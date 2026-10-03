@@ -3,49 +3,62 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
-<meta name="theme-color" content="#0f1115">
+<meta name="theme-color" content="#ededed">
 <title>Oscar NAS</title>
 <link rel="stylesheet" href="style.css">
 </head>
 <body>
 
+<!-- WeChat-style hairline progress at the very top. Nothing else. -->
+<div id="topbar"><i></i></div>
+
 <!-- ============================ login ============================ -->
 <section id="login" class="hidden">
-  <form class="card" id="loginForm" autocomplete="on">
-    <h1>Oscar NAS</h1>
-    <p class="sub">輸入密碼後可存取移動硬盤 E:</p>
-    <div class="field">
-      <label for="pw">管理員密碼</label>
-      <input id="pw" type="password" inputmode="text" autocomplete="current-password"
-             spellcheck="false" autocapitalize="off" placeholder="••••••••">
-      <button class="reveal" id="revealPw" type="button" aria-label="顯示或隱藏密碼">顯示</button>
+  <div class="wx-nav"><h1>Oscar NAS</h1></div>
+
+  <form class="wx-card" id="loginForm" autocomplete="on">
+    <div class="lead">
+      <h1>管理員登入</h1>
+      <p>輸入密碼後可存取移動硬盤 E:</p>
     </div>
-    <button class="btn primary" id="loginBtn" type="submit"><span class="lbl">登入</span></button>
-    <div class="err" id="loginErr"></div>
+
+    <div class="wx-cell">
+      <label for="pw">密碼</label>
+      <input id="pw" type="password" inputmode="text" autocomplete="current-password"
+             spellcheck="false" autocapitalize="off" placeholder="請輸入密碼">
+      <button class="wx-eye" id="revealPw" type="button" aria-label="顯示或隱藏密碼">顯示</button>
+    </div>
+
+    <div class="wx-err" id="loginErr"></div>
+
+    <div class="pad">
+      <button class="btn primary" id="loginBtn" type="submit"><span class="lbl">登入</span></button>
+    </div>
   </form>
 </section>
 
 <!-- ============================= app ============================= -->
 <section id="app" class="hidden">
-  <header>
-    <div class="brand">Oscar NAS</div>
-    <div class="disk" id="disk">…</div>
-    <div class="spacer"></div>
-    <a class="btn icon" href="calendar.html"><span class="lbl">日曆</span></a>
-    <button class="btn icon" id="logoutBtn"><span class="lbl">登出</span></button>
+  <header class="wx-nav">
+    <button class="wx-back" id="backBtn" disabled><span class="chev">‹</span>返回</button>
+    <h1 id="navTitle">Oscar NAS</h1>
+    <button class="wx-nav-act right" id="logoutBtn">登出</button>
   </header>
 
   <main>
-    <div class="crumbs" id="crumbs"></div>
+    <div class="wx-pathbar">
+      <div class="wx-path" id="crumbs"></div>
+      <span class="wx-disk" id="disk"></span>
+    </div>
 
-    <div class="toolbar">
-      <button class="btn" id="upBtn"><span class="ico">⬆</span><span class="lbl">上傳檔案</span></button>
-      <button class="btn" id="mkdirBtn"><span class="ico">＋</span><span class="lbl">新文件夾</span></button>
-      <button class="btn" id="refreshBtn"><span class="ico">↻</span><span class="lbl">重新整理</span></button>
+    <div class="wx-toolbar">
+      <button class="btn" id="upBtn"><span class="lbl">上傳檔案</span></button>
+      <button class="btn" id="mkdirBtn"><span class="lbl">新建文件夾</span></button>
+      <button class="btn" id="refreshBtn"><span class="lbl">重新整理</span></button>
       <input id="files" type="file" multiple class="hidden">
     </div>
 
-    <ul class="list loading" id="list">
+    <ul class="wx-list loading" id="list">
       <li class="skel"></li><li class="skel"></li><li class="skel"></li>
       <li class="skel"></li><li class="skel"></li><li class="skel"></li>
     </ul>
@@ -58,11 +71,6 @@
 </section>
 
 <div id="toast"></div>
-
-<div id="busy" aria-hidden="true">
-  <div class="spin lg"></div>
-  <div id="busyText">載入中…</div>
-</div>
 
 <script src="config.js"></script>
 <script src="app.js"></script>

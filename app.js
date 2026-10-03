@@ -1,101 +1,141 @@
 'use strict';
-/* Oscar NAS - file manager front end. Vanilla JS, no build step. */
+/* Oscar NAS - front end. Vanilla JS, no build step.
+
+   Motion model (WeChat-like, deliberately restrained):
+     - a 2px green hairline at the top of the viewport is the ONLY page-level
+       loading indicator. No spinner card, no dimmed overlay, no fake modal.
+     - row-level work (download / rename) shows a tiny spinner inside the button.
+     - directory changes are a page turn: the outgoing list slides out to one
+       side, the incoming list slides in from the other.
+     - tapping a row tints the whole row grey. WeChat has no ripple.
+*/
 
 var API = window.WB.API;
 var TOKEN_KEY = 'wb_nas_token';
 var token = localStorage.getItem(TOKEN_KEY) || '';
 var cwd = '';
+var navLock = false;
 
 var $ = function (id) { return document.getElementById(id); };
+
+/* ------------------------------------------------------------------ toast */
 
 function toast(msg, isErr) {
   var t = $('toast');
   t.textContent = msg;
   t.className = 'on' + (isErr ? ' err' : '');
   clearTimeout(toast._t);
-  toast._t = setTimeout(function () { t.className = ''; }, isErr ? 4200 : 2200);
+  toast._t = setTimeout(function () { t.className = ''; }, isErr ? 3800 : 2000);
 }
 
-function fmtSize(n) {
-  if (n == null) return '';
-  var u = ['B', 'KB', 'MB', 'GB', 'TB'], i = 0;
-  while (n >= 1024 && i < u.length - 1) { n /= 1024; i++; }
-  return (i === 0 ? n : n.toFixed(n < 10 ? 1 : 0)) + ' ' + u[i];
+function shake(el, msg) {
+  el.textContent = msg;
+  el.classList.remove('show');
+  void el.offsetWidth;
+  el.classList.add('show');
 }
 
-function fmtDate(ms) {
-  var d = new Date(ms), p = function (x) { return String(x).padStart(2, '0'); };
-  return d.getFullYear() + '-' + p(d.getMonth() + 1) + '-' + p(d.getDate()) + ' ' + p(d.getHours()) + ':' + p(d.getMinutes());
+/* ------------------------------------------------- top hairline progress bar */
+
+var barDepth = 0;
+
+function barStart() {
+  barDepth++;
+  if (barDepth > 1) return;                 /* already running: do not restart */
+  var t = $('topbar'), i = t.firstElementChild;
+  clearTimeout(barDone._t);
+  t.classList.add('on');
+  i.style.transition = 'none';
+  i.style.opacity = '1';
+  i.style.width = '0%';
+  void i.offsetWidth;                       /* commit, so the reset reads as a change */
+  i.style.transition = 'width .55s cubic-bezier(.2, .8, .3, 1)';
+  i.style.width = '72%';                    /* creep towards, but never reach 100 */
+}
+
+function barDone() {
+  barDepth = Math.max(0, barDepth - 1);
+  if (barDepth) return;
+  var t = $('topbar'), i = t.firstElementChild;
+  i.style.transition = 'width .16s ease, opacity .3s ease .14s';
+  i.style.width = '100%';
+  i.style.opacity = '0';
+  clearTimeout(barDone._t);
+  barDone._t = setTimeout(function () { t.classList.remove('on'); }, 520);
+}
+
+/* -------------------------------------------------------------- page turn */
+
+function reducedMotion() {
+  return !!(window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches);
+}
+
+/* dir > 0 : going deeper -> old list leaves left,  new arrives from right
+   dir < 0 : going back   -> old list leaves right, new arrives from left   */
+function navTo(path, dir) {
+  if (navLock) return;
+  navLock = true;
+  var ul = $('list');
+
+  var outF = dir > 0
+    ? [{ transform: 'translateX(0)', opacity: 1 }, { transform: 'translateX(-28px)', opacity: 0 }]
+    : [{ transform: 'translateX(0)', opacity: 1 }, { transform: 'translateX(28px)', opacity: 0 }];
+  var inF = dir > 0
+    ? [{ transform: 'translateX(28px)', opacity: 0 }, { transform: 'translateX(0)', opacity: 1 }]
+    : [{ transform: 'translateX(-28px)', opacity: 0 }, { transform: 'translateX(0)', opacity: 1 }];
+
+  function go() {
+    load(path).then(function () {
+      if (!reducedMotion()) ul.animate(inF, { duration: 240, easing: 'cubic-bezier(.2, .8, .3, 1)' });
+    }).then(function () { navLock = false; }, function () { navLock = false; });
+  }
+
+  if (reducedMotion()) { go(); return; }
+  var a = ul.animate(outF, { duration: 140, easing: 'cubic-bezier(.4, 0, .9, .5)', fill: 'forwards' });
+  if (a.finished && a.finished.then) a.finished.then(go, go);
+  else a.onfinish = go;
 }
 
 /* ---------------------------------------------------------------- transport */
 
-/* ----------------------------------------------------------- motion helpers */
-
-/* A counter, not a boolean. Requests overlap (list + disk, a rename that
- * re-lists behind it) and the veil must only lift when the LAST one lands. */
-var busyCount = 0;
-
-function pushBusy(text) {
-  busyCount++;
-  if (text) $('busyText').textContent = text;
-  $('busy').classList.add('on');
+function req(method, url, body, isForm) {
+  barStart();
+  return new Promise(function (resolve, reject) {
+    var x = new XMLHttpRequest();
+    x.open(method, API + url, true);
+    if (token) x.setRequestHeader('Authorization', 'Bearer ' + token);
+    if (body && !isForm) x.setRequestHeader('Content-Type', 'application/json');
+    x.onload = function () {
+      barDone();
+      var d = {};
+      try { d = JSON.parse(x.responseText); } catch (e) { }
+      if (x.status === 401) { logout(true); reject(new Error('登入已過期，請重新登入')); return; }
+      if (x.status >= 200 && x.status < 300) resolve(d);
+      else reject(new Error(d.error || ('HTTP ' + x.status)));
+    };
+    x.onerror = function () { barDone(); reject(new Error('連不上 NAS，檢查網絡')); };
+    x.send(body ? (isForm ? body : JSON.stringify(body)) : null);
+  });
 }
 
-function popBusy() {
-  busyCount = Math.max(0, busyCount - 1);
-  if (!busyCount) $('busy').classList.remove('on');
-}
-
-function isBusy() { return busyCount > 0; }
-
-/* Ripple from the exact tap point - the difference between "the page ignored
- * me" and "the page heard me". Costs one span and one timeout. */
-function ripple(el, e) {
-  if (!el || !el.classList || !el.classList.contains('btn')) return;
-  var r = el.getBoundingClientRect();
-  var d = Math.max(r.width, r.height) * 1.1;
-  var s = document.createElement('span');
-  s.className = 'ripple';
-  s.style.width = s.style.height = d + 'px';
-  var cx = (e && e.clientX) ? e.clientX - r.left : r.width / 2;
-  var cy = (e && e.clientY) ? e.clientY - r.top : r.height / 2;
-  s.style.left = (cx - d / 2) + 'px';
-  s.style.top = (cy - d / 2) + 'px';
-  el.appendChild(s);
-  setTimeout(function () { if (s.parentNode) s.parentNode.removeChild(s); }, 600);
-}
-
-/* Wrap a click handler: ripple on frame one, spinner + veil while it works,
- * errors surfaced as a toast, and the button is NEVER left stuck - even if the
- * handler throws synchronously. */
+/* Wrap a click handler so the button can never be left spinning, and so every
+   failure surfaces as a toast exactly once. */
 function tap(btn, veilText, work) {
   return function (e) {
-    ripple(btn, e);
     if (btn && btn.classList.contains('busy')) return;
-    var heavy = !!veilText;
-    if (heavy) { btn.classList.add('busy'); pushBusy(veilText); }
-    var done = function () { if (heavy) { btn.classList.remove('busy'); popBusy(); } };
+    if (veilText) btn.classList.add('busy');
+    var done = function () { if (veilText) btn.classList.remove('busy'); };
     var fail = function (err) {
       done();
       toast(err && err.message ? err.message : String(err), true);
     };
     try {
       var r = work(e);
-      if (r && typeof r.then === 'function') {
-        return r.then(function (v) { done(); return v; }, fail);
-      }
+      if (r && typeof r.then === 'function') return r.then(function (v) { done(); return v; }, fail);
       done();
       return r;
     } catch (err) { fail(err); }
   };
-}
-
-function shake(el, msg) {
-  el.textContent = msg;
-  el.classList.remove('show');
-  void el.offsetWidth;                 /* force reflow so the animation replays */
-  el.classList.add('show');
 }
 
 function showSkeleton(n) {
@@ -111,7 +151,6 @@ function showSkeleton(n) {
 
 function hideSkeleton() { $('list').classList.remove('loading'); }
 
-/* Small labelled button whose label fades out while it works. */
 function mkBtn(cls, label, veilText, work) {
   var b = document.createElement('button');
   b.className = 'btn icon' + (cls ? ' ' + cls : '');
@@ -121,22 +160,18 @@ function mkBtn(cls, label, veilText, work) {
   return b;
 }
 
-function req(method, url, body, isForm) {
-  return new Promise(function (resolve, reject) {
-    var x = new XMLHttpRequest();
-    x.open(method, API + url, true);
-    if (token) x.setRequestHeader('Authorization', 'Bearer ' + token);
-    if (body && !isForm) x.setRequestHeader('Content-Type', 'application/json');
-    x.onload = function () {
-      var d = {};
-      try { d = JSON.parse(x.responseText); } catch (e) { }
-      if (x.status === 401) { logout(true); reject(new Error('登入已過期，請重新登入')); return; }
-      if (x.status >= 200 && x.status < 300) resolve(d);
-      else reject(new Error(d.error || ('HTTP ' + x.status)));
-    };
-    x.onerror = function () { reject(new Error('連不上 NAS，檢查網絡')); };
-    x.send(body ? (isForm ? body : JSON.stringify(body)) : null);
-  });
+/* ------------------------------------------------------------------- format */
+
+function fmtSize(n) {
+  if (n == null) return '';
+  var u = ['B', 'KB', 'MB', 'GB', 'TB'], i = 0;
+  while (n >= 1024 && i < u.length - 1) { n /= 1024; i++; }
+  return (i === 0 ? n : n.toFixed(n < 10 ? 1 : 0)) + ' ' + u[i];
+}
+
+function fmtDate(ms) {
+  var d = new Date(ms), p = function (x) { return String(x).padStart(2, '0'); };
+  return d.getFullYear() + '-' + p(d.getMonth() + 1) + '-' + p(d.getDate()) + ' ' + p(d.getHours()) + ':' + p(d.getMinutes());
 }
 
 /* --------------------------------------------------------------------- auth */
@@ -145,8 +180,11 @@ function logout(silent) {
   if (token) { req('POST', '/api/logout').catch(function () { }); }
   token = '';
   localStorage.removeItem(TOKEN_KEY);
+  cwd = '';
   $('app').classList.add('hidden');
   $('login').classList.remove('hidden');
+  $('backBtn').disabled = true;
+  $('navTitle').textContent = 'Oscar NAS';
   if (!silent) toast('已登出');
 }
 
@@ -171,10 +209,7 @@ $('loginForm').addEventListener('submit', function (e) {
     .finally(function () { btn.classList.remove('busy'); });
 });
 
-/* Show / hide the password without leaving the keyboard, and clear a stale
- * error the moment they start typing again. */
-$('revealPw').addEventListener('click', function (e) {
-  ripple(this, e);
+$('revealPw').addEventListener('click', function () {
   var i = $('pw');
   var show = i.type === 'password';
   i.type = show ? 'text' : 'password';
@@ -193,20 +228,19 @@ function start() {
   $('login').classList.add('hidden');
   $('app').classList.remove('hidden');
   cwd = '';
-  pushBusy('載入硬盤中…');
-  load('').finally(function () { popBusy(); });
+  showSkeleton();
+  load('');
 }
 
 function load(p) {
   showSkeleton();
-  $('disk').classList.add('loading');
   return req('GET', '/api/list?path=' + encodeURIComponent(p))
     .then(function (d) {
       cwd = d.path || '';
       renderCrumbs(cwd);
       renderList(d);
       return req('GET', '/api/disk?path=' + encodeURIComponent(cwd)).then(function (k) {
-        $('disk').textContent = fmtSize(k.free) + ' 可用 / ' + fmtSize(k.total);
+        $('disk').textContent = fmtSize(k.free) + ' 可用';
       }).catch(function () { });
     })
     .catch(function (e) {
@@ -216,108 +250,119 @@ function load(p) {
       li.className = 'empty';
       li.textContent = '讀取失敗：' + e.message;
       ul.appendChild(li);
-      toast(e.message, true);
     })
-    .finally(function () {
-      hideSkeleton();
-      $('disk').classList.remove('loading');
-    });
+    .finally(function () { hideSkeleton(); });
 }
+
+/* ------------------------------------------------------------------- chrome */
 
 function renderCrumbs(p) {
   var box = $('crumbs');
   box.innerHTML = '';
+
   var root = document.createElement('a');
   root.textContent = 'E:';
-  root.onclick = function () { load(''); };
+  root.onclick = function () { if (cwd) navTo('', -1); };
   box.appendChild(root);
 
-  if (!p) return;
-  var acc = '';
-  p.split('/').filter(Boolean).forEach(function (seg) {
-    acc = acc ? acc + '/' + seg : seg;
-    var sep = document.createElement('span');
-    sep.className = 'sep';
-    sep.textContent = '/';
-    box.appendChild(sep);
-    var a = document.createElement('a');
-    a.textContent = seg;
-    var target = acc;
-    a.onclick = function () { load(target); };
-    box.appendChild(a);
-  });
+  if (p) {
+    var acc = '';
+    p.split('/').filter(Boolean).forEach(function (seg) {
+      acc = acc ? acc + '/' + seg : seg;
+      var sep = document.createElement('span');
+      sep.className = 'sep';
+      sep.textContent = '/';
+      box.appendChild(sep);
+      var a = document.createElement('a');
+      a.textContent = seg;
+      var target = acc;
+      a.onclick = function () { navTo(target, target.length < cwd.length ? -1 : 1); };
+      box.appendChild(a);
+    });
+  }
+
+  $('backBtn').disabled = !p;
+  $('navTitle').textContent = p ? p.split('/').pop() : 'Oscar NAS';
 }
+
+$('backBtn').addEventListener('click', function () {
+  if (!cwd) return;
+  navTo(cwd.split('/').slice(0, -1).join('/'), -1);
+});
+
+/* --------------------------------------------------------------------- list */
 
 function renderList(d) {
   var ul = $('list');
   ul.innerHTML = '';
   var all = d.dirs.concat(d.files);
   if (!all.length) {
-    var li = document.createElement('li');
-    li.className = 'empty';
-    li.textContent = '（空文件夾）';
-    ul.appendChild(li);
+    var e = document.createElement('li');
+    e.className = 'empty';
+    e.textContent = '（空文件夾）';
+    ul.appendChild(e);
     return;
   }
 
   all.forEach(function (it, idx) {
+    var rel = cwd ? cwd + '/' + it.name : it.name;
     var li = document.createElement('li');
+    li.className = 'tappable';
     li.style.setProperty('--i', String(Math.min(idx, 26)));
 
-    var nm = document.createElement('div');
-    nm.className = 'nm' + (it.dir ? ' dir' : '');
-    nm.textContent = (it.dir ? '📁 ' : '📄 ') + it.name;
-    var rel = cwd ? cwd + '/' + it.name : it.name;
-    nm.onclick = function () {
-      if (it.dir) {
-        if (isBusy()) return;
-        pushBusy('載入中…');
-        load(rel).finally(popBusy);
-      } else {
-        download(rel).catch(function (e) { toast('下載失敗：' + e.message, true); });
-      }
-    };
+    var ic = document.createElement('span');
+    ic.className = 'ico';
+    ic.textContent = it.dir ? '📁' : '📄';
+    li.appendChild(ic);
+
+    var nm = document.createElement('span');
+    nm.className = 'nm';
+    nm.textContent = it.name;
     li.appendChild(nm);
 
-    var ms = document.createElement('div');
-    ms.className = 'meta size';
-    ms.textContent = it.dir ? '' : fmtSize(it.size);
-    li.appendChild(ms);
+    if (!it.dir) {
+      var sz = document.createElement('span');
+      sz.className = 'sub size';
+      sz.textContent = fmtSize(it.size);
+      li.appendChild(sz);
+    }
 
-    var md = document.createElement('div');
-    md.className = 'meta';
+    var md = document.createElement('span');
+    md.className = 'sub';
     md.textContent = fmtDate(it.mtime);
     li.appendChild(md);
 
-    var acts = document.createElement('div');
-    acts.className = 'acts';
-
-    if (!it.dir) {
+    if (it.dir) {
+      var chev = document.createElement('span');
+      chev.className = 'chev';
+      chev.textContent = '›';
+      li.appendChild(chev);
+      li.onclick = function () { navTo(rel, 1); };
+    } else {
+      var acts = document.createElement('span');
+      acts.className = 'acts';
       acts.appendChild(mkBtn('', '下載', '下載中…', function () { return download(rel); }));
+      acts.appendChild(mkBtn('', '改名', null, function () {
+        var n = prompt('新名稱：', it.name);
+        if (!n || n === it.name) return null;
+        return req('POST', '/api/rename', { path: rel, newName: n })
+          .then(function () { toast('已改名'); load(cwd); });
+      }));
+      acts.appendChild(mkBtn('danger', '刪除', null, function () {
+        if (!confirm('確定刪除「' + it.name + '」？\n此操作無法復原。')) return null;
+        return req('POST', '/api/delete', { path: rel })
+          .then(function () { toast('已刪除'); load(cwd); });
+      }));
+      li.appendChild(acts);
     }
 
-    acts.appendChild(mkBtn('', '改名', null, function () {
-      var n = prompt('新名稱：', it.name);
-      if (!n || n === it.name) return null;
-      return req('POST', '/api/rename', { path: rel, newName: n })
-        .then(function () { toast('已改名'); return load(cwd); });
-    }));
-
-    acts.appendChild(mkBtn('danger', '刪除', null, function () {
-      var what = it.dir ? '整個文件夾（連內容）' : '檔案';
-      if (!confirm('確定刪除「' + it.name + '」' + what + '？\n此操作無法復原。')) return null;
-      return req('POST', '/api/delete', { path: rel })
-        .then(function () { toast('已刪除'); return load(cwd); });
-    }));
-
-    li.appendChild(acts);
     ul.appendChild(li);
   });
 }
 
+/* ----------------------------------------------------------------- download */
+
 function download(rel) {
-  /* Fetch it here rather than handing the browser a bare link, so the button can
-   * show a spinner and we can surface a real error instead of a silent nothing. */
   var url = API + '/api/download?path=' + encodeURIComponent(rel);
   return fetch(url, { headers: { Authorization: 'Bearer ' + token } })
     .then(function (r) {
@@ -354,6 +399,7 @@ function uploadNext(list, i) {
     return;
   }
   if (i === 0) $('upBtn').classList.add('busy');
+
   var f = list[i];
   var fd = new FormData();
   fd.append('files', f, f.name);
@@ -373,14 +419,12 @@ function uploadNext(list, i) {
   };
 
   x.onload = function () {
-    if (x.status === 200) { uploadNext(list, i + 1); }
-    else {
-      var msg = 'HTTP ' + x.status;
-      try { msg = JSON.parse(x.responseText).error || msg; } catch (e) { }
-      $('prog').classList.add('hidden');
-      $('upBtn').classList.remove('busy');
-      toast('上傳失敗（' + f.name + '）：' + msg, true);
-    }
+    if (x.status === 200) { uploadNext(list, i + 1); return; }
+    var msg = 'HTTP ' + x.status;
+    try { msg = JSON.parse(x.responseText).error || msg; } catch (e) { }
+    $('prog').classList.add('hidden');
+    $('upBtn').classList.remove('busy');
+    toast('上傳失敗（' + f.name + '）：' + msg, true);
   };
   x.onerror = function () {
     $('prog').classList.add('hidden');
@@ -390,34 +434,35 @@ function uploadNext(list, i) {
   x.send(fd);
 }
 
-/* --------------------------------------------------------------- new folder */
+/* ----------------------------------------------------------------- toolbar */
 
 $('mkdirBtn').onclick = tap($('mkdirBtn'), null, function () {
   var n = prompt('新文件夾名稱：');
   if (!n) return null;
   return req('POST', '/api/mkdir', { path: cwd, name: n })
-    .then(function () { toast('已建立'); return load(cwd); });
+    .then(function () { toast('已建立'); load(cwd); });
 });
 
 $('refreshBtn').onclick = tap($('refreshBtn'), null, function () {
   return load(cwd).then(function () { toast('已重新整理'); });
 });
 
-$('logoutBtn').onclick = tap($('logoutBtn'), null, function () { logout(); });
+$('logoutBtn').onclick = function () { logout(); };
 
-/* -------------------------------------------------------------------- boot */
+/* --------------------------------------------------------------------- boot */
 
 if (token) {
-  pushBusy('驗證中…');
+  $('login').classList.add('hidden');
+  $('app').classList.remove('hidden');
+  showSkeleton();
   req('GET', '/api/whoami')
-    .then(start)
+    .then(function () { return load(''); })
     .catch(function () {
       token = '';
       localStorage.removeItem(TOKEN_KEY);
       $('app').classList.add('hidden');
       $('login').classList.remove('hidden');
-    })
-    .finally(popBusy);
+    });
 } else {
   $('login').classList.remove('hidden');
 }
