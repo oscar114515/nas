@@ -246,6 +246,14 @@ function fileIcon(kind) {
 function rawUrl(rel) { return API + '/api/raw?path=' + encodeURIComponent(rel) + '&t=' + encodeURIComponent(token); }
 function dlUrl(rel) { return API + '/api/download?path=' + encodeURIComponent(rel); }
 
+/* Images go through /api/thumb, which shrinks them ON the machine that holds
+   the disk (System.Drawing) and caches the 220px JPEG. That is the whole
+   difference between "ten seconds per photo" and "instant after the first". */
+function thumbUrl(rel, edge) {
+  return API + '/api/thumb?path=' + encodeURIComponent(rel) + '&w=' + (edge || 220) +
+         '&t=' + encodeURIComponent(token);
+}
+
 /* Real thumbnails are handled by the serial queue further down, not here. */
 
 /* ----------------------------------------------------------------- preview */
@@ -408,8 +416,10 @@ function resetThumbs() {
   thumbsDone = 0;
   thumbsTotal = 0;
   if (thumbObserver) { thumbObserver.disconnect(); thumbObserver = null }
-  var el = $('more');
-  if (el) el.classList.add('hidden');
+  var m = $('more');
+  if (m) m.classList.add('hidden');
+  var b = $('progbar');
+  if (b) b.classList.add('hidden');
 }
 
 function watchThumbs() {
@@ -474,28 +484,47 @@ function fetchThumb(li, next) {
     var img = new Image();
     img.alt = '';
     img.onload = function () { if (!settled) { box.textContent = ''; box.appendChild(img); } settle(true); };
-    img.onerror = function () { settle(false); };        /* keep the icon, move on */
-    img.src = rawUrl(rel);
+    img.onerror = function () {
+      /* The thumbnailer could not make one (HEIC / RAW / corrupt). The endpoint
+         falls back to the original bytes, so try once more before giving up and
+         leaving the icon. */
+      img.onerror = function () { settle(false); };
+      img.src = rawUrl(rel);
+    };
+    img.src = thumbUrl(rel);
   } else if (kind === 'video') {
+    /* No Windows API can grab a frame from a video, so this one still costs real
+       bytes: the browser has to read enough of the file to decode a frame. Kept
+       in the same single-threaded queue so it cannot starve the photos. */
     var v = document.createElement('video');
     v.muted = true; v.playsInline = true; v.preload = 'metadata';
-    v.onloadeddata = function () { try { v.currentTime = 0.6; } catch (e) { } };
+    v.onloadeddata = function () { try { v.currentTime = 0.1; } catch (e) { } };
     v.onseeked = function () { if (!settled) { box.textContent = ''; box.appendChild(v); } settle(true); };
     v.onerror = function () { settle(false); };
     v.src = rawUrl(rel);
-    setTimeout(function () { settle(false); }, 9000);      /* never let one stall the queue */
+    setTimeout(function () { settle(false); }, 12000);
   } else {
     settle(false);
   }
 }
 
 function paintThumbs() {
-  var el = $('more');
-  if (!el) return;
-  if (!thumbsTotal) { el.classList.add('hidden'); return; }
-  el.classList.remove('hidden');
-  el.textContent = '縮圖 ' + thumbsDone + ' / ' + thumbsTotal +
-    (thumbBusy ? '　（同一時間只下一個）' : '');
+  var bar = $('progbar'), more = $('more');
+  if (bar) {
+    if (!thumbsTotal) { bar.classList.add('hidden'); }
+    else {
+      bar.classList.remove('hidden');
+      var pct = Math.round(thumbsDone / thumbsTotal * 100);
+      $('progbarIn').style.width = pct + '%';
+      $('progbarTxt').textContent = '已加載 ' + thumbsDone + ' / ' + thumbsTotal + '　' + pct + '%' +
+        (thumbBusy ? '　（同一時間只下一個）' : '');
+    }
+  }
+  if (more) {
+    if (!thumbsTotal) { more.classList.add('hidden'); return; }
+    more.classList.remove('hidden');
+    more.textContent = '';
+  }
 }
 
 /* ------------------------------------------------------------------- format */
@@ -677,23 +706,50 @@ $('backBtn').addEventListener('click', function () {
 function renderList(d) {
   var ul = $('list');
   ul.innerHTML = '';
-  var all = (d.dirs || []).concat(d.files || []);
-  if (!all.length) {
+  var dirs = d.dirs || [], files = d.files || [];
+  if (!dirs.length && !files.length) {
     var e = document.createElement('li');
     e.className = 'empty';
     e.textContent = '（空文件夾）';
     ul.appendChild(e);
+    thumbsTotal = 0;
+    paintThumbs();
     return;
   }
-  all.forEach(function (it, idx) { ul.appendChild(buildRow(it, idx)); });
+
+  /* The counter covers the DIRECT children of the folder you are looking at and
+     nothing else: 20 photos plus 5 sub-folders reads as "25". Whatever lives
+     inside those 5 sub-folders is not counted, and is not walked either. */
+  thumbsTotal = dirs.length + (d.totalFiles != null ? d.totalFiles : files.length);
+  thumbsDone = 0;
+
+  dirs.forEach(function (it, idx) {
+    var li = buildRow(it, idx);
+    li.dataset.done = '1';                 /* a folder has no thumbnail to fetch */
+    thumbsDone++;
+    ul.appendChild(li);
+  });
+
+  files.forEach(function (it, idx) {
+    var li = buildRow(it, idx);
+    if (!li.dataset.thumb) { li.dataset.done = '1'; thumbsDone++; }   /* Word/PDF use an icon */
+    ul.appendChild(li);
+  });
+
   watchThumbs();
+  paintThumbs();
 }
 
 /* Append the next page without disturbing what is already on screen. */
 function appendFiles(files) {
   var ul = $('list');
-  (files || []).forEach(function (it, idx) { ul.appendChild(buildRow(it, idx)); });
+  (files || []).forEach(function (it, idx) {
+    var li = buildRow(it, idx);
+    if (!li.dataset.thumb) { li.dataset.done = '1'; thumbsDone++; }
+    ul.appendChild(li);
+  });
   watchThumbs();
+  paintThumbs();
 }
 
 function buildRow(it, idx) {

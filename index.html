@@ -45,6 +45,13 @@
     <button class="wx-nav-act right" id="logoutBtn">登出</button>
   </header>
 
+  <!-- load progress for THIS folder only: its direct children, not a recursive
+       count of everything underneath. -->
+  <div class="wx-progress hidden" id="progbar">
+    <div class="bar"><i id="progbarIn"></i></div>
+    <span class="tx" id="progbarTxt"></span>
+  </div>
+
   <div id="diskbar" class="hidden">E: 硬碟未連接 — 請插好移動硬碟，插上後會自動恢復，不用重啟</div>
 
   <main>
