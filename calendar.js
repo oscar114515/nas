@@ -260,6 +260,37 @@ $('calNote').onclick = function () {
 
 /* -------------------------------------------------------------------- boot */
 
+function isLocalHost() {
+  var h = location.hostname;
+  return h === '127.0.0.1' || h === 'localhost' || h === '';
+}
+
+/* The wall screen must never stop and ask for a password - not after a reboot,
+ * not after the server restarts. When the page is loaded straight from the NAS
+ * itself, the server hands out a long-lived token to loopback callers only
+ * (/api/local-token rejects anything arriving through Funnel with a 403). */
+function grabLocalToken() {
+  return fetch(API + '/api/local-token', { cache: 'no-store' })
+    .then(function (r) { if (!r.ok) throw new Error('HTTP ' + r.status); return r.json(); })
+    .then(function (d) {
+      if (!d || !d.token) throw new Error('no token');
+      token = d.token;
+      localStorage.setItem(TOKEN_KEY, token);
+      return true;
+    });
+}
+
+function start(allowLocalRetry) {
+  api('GET', '/api/whoami').then(loadEvents).catch(function () {
+    if (allowLocalRetry && isLocalHost()) {
+      return grabLocalToken()
+        .then(function () { return start(false); })
+        .catch(function () { loadEvents(); });
+    }
+    loadEvents();
+  });
+}
+
 var n0 = new Date();
 viewYear = n0.getFullYear();
 viewMonth = n0.getMonth();
@@ -268,12 +299,7 @@ $('nd').value = todayStr();
 $('boot').remove();
 $('root').classList.remove('hidden');
 renderCal();
-
-if (token) {
-  api('GET', '/api/whoami').then(loadEvents).catch(loadEvents);
-} else {
-  showAuth();
-}
+start(true);
 
 /* Month auto-advances at midnight, and re-check events every 5 min so an entry
  * added from a phone shows up on the wall screen without anyone touching it. */
