@@ -248,19 +248,14 @@ function dlUrl(rel) { return API + '/api/download?path=' + encodeURIComponent(re
 
 /* Images go through /api/thumb, which shrinks them ON the machine that holds
    the disk (ffmpeg) and caches the result. That is the whole difference between
-   "ten seconds per photo" and "one second". */
-var THUMB_KEY = 'wb_nas_thumb_w';
-var THUMB_CHOICES = [
-  { w: 110, label: '最省流量', hint: '约 5 KB 一张，最快' },
-  { w: 170, label: '标准', hint: '约 10 KB 一张（推荐）' },
-  { w: 260, label: '清晰', hint: '约 20 KB 一张' },
-  { w: 400, label: '最清晰', hint: '约 45 KB 一张，最慢' },
-];
+   "ten seconds per photo" and "one second".
 
+   The SIZE of that thumbnail is a SETTING, and the setting lives on the NAS box
+   (see the settings section at the bottom of this file) - not in this browser.
+   So it is read once at startup, from the server, and everything below just
+   reads the resulting value. */
 function thumbEdge() {
-  var v = parseInt(localStorage.getItem(THUMB_KEY), 10);
-  for (var i = 0; i < THUMB_CHOICES.length; i++) if (THUMB_CHOICES[i].w === v) return v;
-  return 170;
+  return SETTINGS.thumbW || DEFAULTS.thumbW;
 }
 
 function thumbUrl(rel, edge) {
@@ -303,10 +298,32 @@ var viewerRel = '';
 
 /* Same spinner, same icon, same colours as the rest of the site - waiting on a
  * third-party viewer should still look like part of this app. */
-function vloading(kind, text) {
+function vloading(kind, text, withBar) {
   return '<div class="vload"><div class="spin lg"></div>' +
          '<div class="ic ' + (KIND_CLASS[kind] || '') + '">' + fileIcon(kind) + '</div>' +
-         '<div class="tx">' + text + '</div></div>';
+         '<div class="tx">' + text + '</div>' +
+         (withBar ? '<div class="lbar"><i></i></div>' : '') + '</div>';
+}
+
+/* Fetch an image into memory with a real percentage, and only hand it over once
+   it is COMPLETE. A plain <img src> paints the parts that have arrived, top to
+   bottom, against whatever the background is - the user sees a black rectangle
+   with a half-drawn photo in it. Nothing partial ever reaches the screen. */
+function loadImageProgress(url, onProgress, onDone) {
+  var x = new XMLHttpRequest();
+  x.open('GET', url, true);
+  x.responseType = 'blob';
+  x.onprogress = function (e) {
+    if (e.lengthComputable && e.total) onProgress(Math.round(e.loaded / e.total * 100));
+  };
+  x.onload = function () {
+    if (x.status >= 200 && x.status < 300 && x.response && x.response.size) {
+      onDone(true, URL.createObjectURL(x.response));
+    } else { onDone(false, null); }
+  };
+  x.onerror = function () { onDone(false, null); };
+  x.ontimeout = function () { onDone(false, null); };
+  x.send();
 }
 
 function openViewer(rel, name, kind, size) {
@@ -320,7 +337,33 @@ function openViewer(rel, name, kind, size) {
   $('vNote').textContent = '檔案直接從你的硬碟讀出，沒有經過任何外部服務。';
 
   if (kind === 'image') {
-    body.innerHTML = '<img alt="" src="' + rawUrl(rel) + '">';
+    /* Show the loading face with a real percentage, then swap in the picture
+       only once every byte has arrived. No black rectangle, no half-drawn photo. */
+    body.innerHTML = vloading('image', '正在下載完整圖片…', true);
+    var bar = body.querySelector('.lbar i');
+    var lbl = body.querySelector('.tx');
+    loadImageProgress(rawUrl(rel),
+      function (pct) {
+        if (bar) bar.style.width = pct + '%';
+        if (lbl) lbl.textContent = '正在下載完整圖片… ' + pct + '%';
+      },
+      function (ok, url) {
+        if (!ok) {
+          body.innerHTML = '<div class="none"><div class="big">圖片載入失敗</div>' +
+            '可能是檔案太大或網路中斷，再試一次。</div>';
+          return;
+        }
+        var full = new Image();
+        full.alt = '';
+        full.onload = function () {
+          body.innerHTML = '';
+          body.className = 'vbody';
+          body.appendChild(full);
+          URL.revokeObjectURL(url);
+        };
+        full.onerror = function () { URL.revokeObjectURL(url); };
+        full.src = url;
+      });
   } else if (kind === 'video') {
     body.innerHTML = '<video controls autoplay playsinline src="' + rawUrl(rel) + '"></video>';
   } else if (kind === 'audio') {
@@ -424,11 +467,16 @@ var thumbObserver = null;
 var thumbsDone = 0;
 var thumbsTotal = 0;
 
-/* Three at a time. The user originally asked for one-at-a-time because twenty
-   300 KB originals were interleaving and leaving half-read files. A thumbnail is
-   ~10 KB now, so the pipe is not the constraint any more - the 800 ms round trip
-   is - and serialising it just made a 25-photo folder take 25 seconds. */
-var THUMB_PARALLEL = 3;
+/* Three at a time by default. The user originally asked for one-at-a-time
+   because twenty 300 KB originals were interleaving and leaving half-read files.
+   A thumbnail is ~10 KB now, so the pipe is not the constraint any more - the
+   800 ms round trip is - and serialising it just made a 25-photo folder take 25
+   seconds. How many run at once is now a SETTING (on the NAS box), so the user
+   can turn it down on a bad connection without waiting for a new release. */
+function thumbParallel() {
+  var n = parseInt(SETTINGS.thumbParallel, 10);
+  return (n >= 1 && n <= 8) ? n : DEFAULTS.thumbParallel;
+}
 
 function resetThumbs() {
   thumbQueue.length = 0;
@@ -452,12 +500,39 @@ function watchThumbs() {
   if (!thumbObserver) {
     thumbObserver = new IntersectionObserver(function (entries) {
       for (var i = 0; i < entries.length; i++) {
-        if (entries[i].isIntersecting) enqueueThumb(entries[i].target);
-        else dropThumb(entries[i].target);
+        var li = entries[i].target;
+        if (entries[i].isIntersecting) {
+          li.dataset.visible = '1';
+          enqueueThumb(li);
+        } else {
+          li.dataset.visible = '';
+          dropThumb(li);
+        }
       }
     }, { rootMargin: '320px 0px' });                 /* start a bit before it is on screen */
   }
   Array.prototype.forEach.call(rows, function (li) { thumbObserver.observe(li); });
+}
+
+/* Rows BELOW what you are looking at keep downloading without waiting for a
+   scroll. The user asked for exactly that, and a 3 KB request is far too cheap
+   to hold back. Preloaded rows are never dropped, so the download runs to the
+   end of the folder on its own.
+
+   Switchable from the settings screen on the NAS box: on a metered connection
+   the user may prefer it to stop at what is actually on screen. */
+var PRELOAD_AHEAD = 12;
+
+function preloadAhead(li) {
+  if (!SETTINGS.autoPreload) return;
+  var n = li;
+  for (var k = 0; k < PRELOAD_AHEAD; k++) {
+    n = n.nextElementSibling;
+    if (!n || !n.dataset.thumb || n.dataset.done || n.dataset.queued) continue;
+    n.dataset.queued = '1';
+    thumbQueue.push(n);
+    thumbsTotal++;
+  }
 }
 
 function enqueueThumb(li) {
@@ -467,6 +542,7 @@ function enqueueThumb(li) {
   thumbsTotal++;
   paintThumbs();
   pumpThumbs();
+  preloadAhead(li);
 }
 
 function dropThumb(li) {
@@ -476,8 +552,15 @@ function dropThumb(li) {
 }
 
 function pumpThumbs() {
-  while (thumbRunning < THUMB_PARALLEL && thumbQueue.length) {
-    var li = thumbQueue.shift();
+  var par = thumbParallel();
+  while (thumbRunning < par && thumbQueue.length) {
+    /* Whatever is actually on screen goes first, even when it joined the queue
+       behind a backlog of preloads. */
+    var idx = 0;
+    for (var i = 0; i < thumbQueue.length; i++) {
+      if (thumbQueue[i].dataset.visible === '1') { idx = i; break; }
+    }
+    var li = thumbQueue.splice(idx, 1)[0];
     if (!li.isConnected) continue;
     li.dataset.queued = '';
     if (li.dataset.done) continue;
@@ -618,7 +701,14 @@ function start() {
   $('app').classList.remove('hidden');
   cwd = '';
   showSkeleton();
-  load('');
+  /* FIRST thing after a refresh or after the password is accepted: read the
+     shared settings off the NAS box, so this device comes up identical to every
+     other one. A failure here must not lock anybody out - the cached values are
+     still perfectly usable - so the error is swallowed and the listing proceeds.
+     (A 401 is different: req() has already logged out and shown the login form.) */
+  return loadSettings()
+    .catch(function () { })
+    .then(function () { return load(''); });
 }
 
 /* ----------------------------------------------------------------- listing
@@ -977,39 +1067,327 @@ $('sheetClose').onclick = closeSheet;
 $('sheet').onclick = function (e) { if (e.target === this) closeSheet(); };
 $('upRefresh').onclick = function () { location.reload(true); };
 
-function showSettings() {
-  var cur = thumbEdge();
-  var h = '<div class="wx-group"><div class="gt">縮略圖清晰度</div>';
-  THUMB_CHOICES.forEach(function (c) {
-    var on = c.w === cur;
-    h += '<div class="wx-opt" data-w="' + c.w + '"' + (on ? ' data-on="1"' : '') + '>' +
-         '<span class="mark">' + (on ? '&#10003;' : '') + '</span>' +
-         '<span class="lbl"><b>' + c.label + '</b><small>' + c.hint + '</small></span></div>';
-  });
-  h += '</div><div class="wx-group"><div class="gt">維護</div>' +
-       '<div class="wx-opt" id="clearThumbs"><span class="mark"></span>' +
-       '<span class="lbl"><b>清除縮略圖快取</b><small>下次查看會重新產生</small></span></div></div>';
-  h += '<div class="wx-note">改完立刻生效（會重新載入目前這個資料夾）。<br>' +
-       '你的網路約 1.6 MB/s，縮略圖就算傳最清晰的也只要零點幾秒，' +
-       '所以清晰度的差別主要在「看起來清不清楚」，不在速度。預設是<b>標準</b>。</div>';
-  openSheet('設置', h);
+/* ============================== SETTINGS ==================================
 
-  Array.prototype.forEach.call($('sheetBody').querySelectorAll('.wx-opt[data-w]'), function (el) {
-    el.onclick = function () {
-      localStorage.setItem(THUMB_KEY, el.dataset.w);
-      closeSheet();
-      toast('已設定為「' + el.querySelector('b').textContent + '」');
-      load(cwd);
-    };
+   THE SETTINGS ARE STORED ON THE NAS BOX, NOT IN THIS BROWSER.
+
+   The requirement, in the user's words: every setting must live on that machine,
+   so that no matter which device opens the site - or whether it was refreshed or
+   just logged in - the FIRST thing that happens is reading those values, and the
+   settings screen on every device looks exactly the same.
+
+   Why localStorage alone is not enough: it is per-browser and per-device. A new
+   phone would start from scratch, and two devices would quietly disagree with
+   each other forever.
+
+   So the model is:
+     - the JSON file on the NAS box is the single source of truth
+     - localStorage is ONLY a first-paint cache, so the list is drawn with the
+       right thumbnail size instead of flashing the default and then resizing
+     - GET /api/settings is the first request after a refresh and the first
+       request after a password is accepted
+     - any change is POSTed, so the next device to load sees it immediately
+   ========================================================================= */
+
+/* Mirrors SETTINGS_SPEC in nas-server/server.js. Kept here so the UI can render
+   correctly even on the very first paint, before the server has answered. */
+var DEFAULTS = { thumbW: 170, thumbParallel: 3, autoPreload: true };
+var SETTINGS = { thumbW: DEFAULTS.thumbW, thumbParallel: DEFAULTS.thumbParallel, autoPreload: DEFAULTS.autoPreload };
+var SETTINGS_CACHE_KEY = 'wb_nas_settings';
+
+/* One row per setting. Adding a setting in a future version = one line here plus
+   one line in the server's SETTINGS_SPEC. */
+var SETTING_ROWS = [
+  {
+    group: '顯示',
+    key: 'thumbW',
+    label: '縮略圖清晰度',
+    hint: '清單裡每一格圖片的畫質',
+    reload: true,                       /* thumbnails must be re-fetched */
+    choices: [
+      { v: 110, text: '最省流量 5KB', hint: '約 5 KB 一張，最快' },
+      { v: 170, text: '標準 10KB', hint: '約 10 KB 一張（預設）' },
+      { v: 260, text: '清晰 20KB', hint: '約 20 KB 一張' },
+      { v: 400, text: '最清晰 45KB', hint: '約 45 KB 一張，最慢' },
+    ],
+  },
+  {
+    group: '進階',
+    key: 'thumbParallel',
+    label: '同時下載縮圖',
+    hint: '一次同時抓幾個封面',
+    choices: [
+      { v: 1, text: '1 張', hint: '最省頻寬，最慢' },
+      { v: 2, text: '2 張', hint: '慢' },
+      { v: 3, text: '3 張', hint: '預設' },
+      { v: 4, text: '4 張', hint: '快' },
+      { v: 6, text: '6 張', hint: '最快，最吃頻寬' },
+    ],
+  },
+  {
+    group: '進階',
+    key: 'autoPreload',
+    label: '背景自動下載',
+    hint: '看完一張就自己接著下一張',
+    choices: [
+      { v: true, text: '開啟', hint: '不用等你捲下去才開始（預設）' },
+      { v: false, text: '關閉', hint: '只下載你看到的部分，省流量' },
+    ],
+  },
+];
+
+function rowByKey(k) {
+  for (var i = 0; i < SETTING_ROWS.length; i++) if (SETTING_ROWS[i].key === k) return SETTING_ROWS[i];
+  return null;
+}
+
+function choiceText(row, v) {
+  for (var i = 0; i < row.choices.length; i++) if (String(row.choices[i].v) === String(v)) return row.choices[i].text;
+  return String(v);
+}
+
+/* Anything that is not one of the allowed values (hand-edited cache, a value
+   from a newer version that this build does not know) snaps back to the default
+   rather than being rendered as an empty row. */
+function sanitizeSettings() {
+  SETTING_ROWS.forEach(function (r) {
+    var ok = false;
+    for (var i = 0; i < r.choices.length; i++) if (String(r.choices[i].v) === String(SETTINGS[r.key])) ok = true;
+    if (!ok) SETTINGS[r.key] = DEFAULTS[r.key];
   });
+}
+
+function cacheSettings() {
+  try { localStorage.setItem(SETTINGS_CACHE_KEY, JSON.stringify(SETTINGS)); } catch (e) { }
+}
+
+/* Instant, offline-safe restoration of the last known values. Runs before the
+   first network call so the very first list is drawn at the right quality. */
+function readCachedSettings() {
+  var raw = null;
+  try { raw = JSON.parse(localStorage.getItem(SETTINGS_CACHE_KEY) || 'null'); } catch (e) { raw = null; }
+  if (raw && typeof raw === 'object') {
+    for (var k in DEFAULTS) {
+      if (Object.prototype.hasOwnProperty.call(DEFAULTS, k) && Object.prototype.hasOwnProperty.call(raw, k)) SETTINGS[k] = raw[k];
+    }
+  } else {
+    /* Pre-0.2.0 kept a single key of its own. Promote it, so upgrading does not
+       silently reset the choice this browser had already made. */
+    var legacy = parseInt(localStorage.getItem('wb_nas_thumb_w'), 10);
+    if (legacy) SETTINGS.thumbW = legacy;
+  }
+  sanitizeSettings();
+}
+
+function absorbSettings(d) {
+  if (d && d.settings) {
+    for (var k in DEFAULTS) {
+      if (Object.prototype.hasOwnProperty.call(DEFAULTS, k) &&
+          Object.prototype.hasOwnProperty.call(d.settings, k)) SETTINGS[k] = d.settings[k];
+    }
+  }
+  sanitizeSettings();
+  cacheSettings();
+}
+
+/* Single place where a setting turns into behaviour. Today every row is read on
+   demand (thumbEdge / thumbParallel / preloadAhead), so there is nothing to push
+   into the DOM - but a future setting that needs it hooks in here. */
+function applySettings() { /* no-op placeholder for settings that paint themselves */ }
+
+/* Read the shared settings from the NAS box. Called as the FIRST request after
+   a refresh AND after a password is accepted. */
+function loadSettings() {
+  /* Snapshot what THIS device believed before the server answers. It is needed
+     for the one-time migration below, and it must be taken first: absorbSettings()
+     overwrites every known key with the server's value, so by the time the
+     migration check runs the local choice would already be gone. */
+  var local = {};
+  for (var k in DEFAULTS) local[k] = SETTINGS[k];
+
+  return req('GET', '/api/settings').then(function (d) {
+    absorbSettings(d);
+    applySettings();
+
+    /* Very first run of this feature: the file does not exist on the NAS box
+       yet, so whatever this browser had already chosen is promoted to become the
+       shared value for every device - instead of being silently thrown away by
+       the upgrade. This window is open only until somebody writes a real value,
+       after which `stored` is true everywhere and nobody overwrites anybody. */
+    if (d && d.stored === false) {
+      var patch = {};
+      for (var k2 in DEFAULTS) if (local[k2] !== DEFAULTS[k2]) patch[k2] = local[k2];
+      if (Object.keys(patch).length) {
+        for (var k3 in patch) SETTINGS[k3] = patch[k3];     /* apply at once */
+        cacheSettings();
+        return req('POST', '/api/settings', { settings: patch })
+          .then(function (d2) { absorbSettings(d2); applySettings(); })
+          .catch(function () { });
+      }
+    }
+    return SETTINGS;
+  });
+}
+
+function saveSettings(patch) {
+  return req('POST', '/api/settings', { settings: patch }).then(function (d) {
+    absorbSettings(d);
+    applySettings();
+    return d;
+  });
+}
+
+/* Named resetAllSettings, not resetSettings: the button it is wired to carries
+   id="resetSettings", and an element id becomes a global name on window. Keeping
+   the two names apart means nobody has to reason about which one wins. */
+function resetAllSettings() {
+  return req('POST', '/api/settings/reset').then(function (d) {
+    absorbSettings(d);
+    applySettings();
+    return d;
+  });
+}
+
+/* --------------------------------------------------- the settings screen ---
+
+   Layout follows the Android settings app, which is what the user asked for:
+   the row shows ONLY the value that is currently selected plus a down arrow.
+   Tapping it unfolds the list of choices. Only ONE list can be open at a time -
+   opening another collapses the previous one automatically. */
+
+function closeMenus(except) {
+  var open = $('sheetBody').querySelectorAll('.wx-sel.open');
+  for (var i = 0; i < open.length; i++) if (open[i] !== except) open[i].classList.remove('open');
+}
+
+/* Registered ONCE on the sheet, not per render: the element survives the
+   innerHTML swap, so wiring this inside showSettings() would stack up one
+   duplicate listener per open. Attached to #sheet rather than #sheetBody so
+   that tapping the header or the padding folds the menu away too - which is
+   what every Android settings screen does. Taps that land inside a .wx-sel are
+   left to that row's own handler. */
+$('sheet').addEventListener('click', function (e) {
+  var n = e.target;
+  while (n && n !== this) { if (n.classList && n.classList.contains('wx-sel')) return; n = n.parentNode; }
+  closeMenus(null);
+});
+
+function paintRow(sel, row) {
+  var val = sel.querySelector('.val');
+  if (val) val.textContent = choiceText(row, SETTINGS[row.key]);
+  var opts = sel.querySelectorAll('.wx-opt');
+  for (var i = 0; i < opts.length; i++) {
+    var on = String(opts[i].dataset.v) === String(SETTINGS[row.key]);
+    if (on) opts[i].setAttribute('data-on', '1'); else opts[i].removeAttribute('data-on');
+    opts[i].querySelector('.mark').innerHTML = on ? '&#10003;' : '';
+  }
+}
+
+function showSettings() {
+  var groups = [], order = [];
+  SETTING_ROWS.forEach(function (r) {
+    if (order.indexOf(r.group) < 0) { order.push(r.group); groups.push({ name: r.group, rows: [] }); }
+    groups[order.indexOf(r.group)].rows.push(r);
+  });
+
+  var h = '';
+  groups.forEach(function (g) {
+    h += '<div class="wx-group"><div class="gt">' + g.name + '</div>';
+    g.rows.forEach(function (r) {
+      h += '<div class="wx-sel" data-key="' + r.key + '">' +
+             '<div class="wx-srow" role="button" tabindex="0" aria-expanded="false">' +
+               '<span class="lbl"><b>' + r.label + '</b><small>' + r.hint + '</small></span>' +
+               '<span class="val">' + choiceText(r, SETTINGS[r.key]) + '</span>' +
+               '<span class="arw" aria-hidden="true"></span>' +
+             '</div><div class="wx-menu" style="--mh:' + (r.choices.length * 64 + 8) + 'px">';
+      r.choices.forEach(function (c) {
+        var on = String(c.v) === String(SETTINGS[r.key]);
+        h += '<div class="wx-opt"' + (on ? ' data-on="1"' : '') + ' data-v="' + c.v + '">' +
+             '<span class="mark">' + (on ? '&#10003;' : '') + '</span>' +
+             '<span class="lbl"><b>' + c.text + '</b>' + (c.hint ? '<small>' + c.hint + '</small>' : '') + '</span>' +
+             '</div>';
+      });
+      h += '</div></div>';
+    });
+    h += '</div>';
+  });
+
+  h += '<div class="wx-group"><div class="gt">維護</div>' +
+       '<div class="wx-opt" id="clearThumbs"><span class="mark"></span>' +
+       '<span class="lbl"><b>清除縮略圖快取</b><small>下次查看會重新產生</small></span></div>' +
+       '<div class="wx-opt danger" id="resetSettings"><span class="mark"></span>' +
+       '<span class="lbl"><b>恢復默認設置</b><small>所有設定回到出廠值</small></span></div>' +
+       '</div>';
+
+  h += '<div class="wx-note">這些設定<b>存在 NAS 那台機</b>，不在這部裝置。<br>' +
+       '無論用手機、平板還是電腦，登入之後看到的都一模一樣；' +
+       '在這裡改，其他裝置下次進入就是新的值。</div>';
+
+  openSheet('設置', h);
+  wireSettings();
+}
+
+function wireSettings() {
+  var body = $('sheetBody');
+
+  Array.prototype.forEach.call(body.querySelectorAll('.wx-sel'), function (sel) {
+    var row = rowByKey(sel.dataset.key);
+    if (!row) return;
+    var head = sel.querySelector('.wx-srow');
+
+    head.onclick = function () {
+      var willOpen = !sel.classList.contains('open');
+      closeMenus(sel);                       /* exactly one menu open, always */
+      sel.classList.toggle('open', willOpen);
+      head.setAttribute('aria-expanded', willOpen ? 'true' : 'false');
+    };
+    head.onkeydown = function (e) {
+      if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); head.onclick(); }
+    };
+
+    Array.prototype.forEach.call(sel.querySelectorAll('.wx-opt'), function (opt) {
+      opt.onclick = function () {
+        var raw = opt.dataset.v;
+        var v = (raw === 'true') ? true : (raw === 'false') ? false : parseInt(raw, 10);
+        if (String(v) === String(SETTINGS[row.key])) { closeMenus(null); return; }
+        head.classList.add('busy');
+        var patch = {};
+        patch[row.key] = v;
+        saveSettings(patch)
+          .then(function () {
+            paintRow(sel, row);
+            closeMenus(null);
+            toast('已設定為「' + choiceText(row, SETTINGS[row.key]) + '」');
+            if (row.reload) load(cwd);          /* new size = new images to fetch */
+          })
+          .catch(function (e) { toast(e.message, true); })
+          .finally(function () { head.classList.remove('busy'); });
+      };
+    });
+  });
+
+  /* Tapping any empty part of the panel folds the open menu away - handled by
+     the one delegated listener registered next to closeMenus(). */
 
   var ct = $('clearThumbs');
   if (ct) ct.onclick = function () {
+    if (ct.classList.contains('busy')) return;
     ct.classList.add('busy');
     req('POST', '/api/thumb/clear')
       .then(function (d) { toast('已清除 ' + d.removed + ' 張縮圖快取'); })
       .catch(function (e) { toast(e.message, true); })
       .finally(function () { ct.classList.remove('busy'); });
+  };
+
+  var rs = $('resetSettings');
+  if (rs) rs.onclick = function () {
+    if (rs.classList.contains('busy')) return;
+    if (!confirm('恢復默認設置？\n\n縮略圖清晰度、同時下載縮圖、背景自動下載\n全部回到出廠值。\n（所有裝置都會一起變回出廠值）')) return;
+    rs.classList.add('busy');
+    resetAllSettings()
+      .then(function () { toast('已恢復默認設置'); closeSheet(); load(cwd); })
+      .catch(function (e) { toast(e.message, true); })
+      .finally(function () { rs.classList.remove('busy'); });
   };
 }
 
@@ -1031,20 +1409,14 @@ $('verBtn').onclick = showLog;
 
 /* --------------------------------------------------------------------- boot */
 
+/* The cache is applied synchronously so the first paint already uses the right
+   thumbnail size; the authoritative copy is then read from the NAS box before
+   the first folder listing. */
+readCachedSettings();
 loadVersion();
 
 if (token) {
-  $('login').classList.add('hidden');
-  $('app').classList.remove('hidden');
-  showSkeleton();
-  req('GET', '/api/whoami')
-    .then(function () { return load(''); })
-    .catch(function () {
-      token = '';
-      localStorage.removeItem(TOKEN_KEY);
-      $('app').classList.add('hidden');
-      $('login').classList.remove('hidden');
-    });
+  start();
 } else {
   $('login').classList.remove('hidden');
 }

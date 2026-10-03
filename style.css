@@ -457,6 +457,17 @@ ul.wx-list.no-row-anim li { animation: none; }
 }
 #viewer .vload .ic svg,
 #viewer .vbody .none .ic svg { width: 26px; height: 26px; }
+/* determinate progress for the full-size image download */
+#viewer .vload .lbar {
+  width: min(240px, 60vw); height: 4px;
+  background: rgba(255, 255, 255, .16);
+  border-radius: 2px; overflow: hidden;
+}
+#viewer .vload .lbar i {
+  display: block; height: 100%; width: 0;
+  background: var(--green);
+  transition: width .18s ease;
+}
 #viewer .vload .ic.t-word, #viewer .vbody .none .ic.t-word { background: #e8f0fd; color: #2b579a; }
 #viewer .vload .ic.t-ppt,  #viewer .vbody .none .ic.t-ppt  { background: #fdeee8; color: #c43e1c; }
 #viewer .vload .ic.t-xls,  #viewer .vbody .none .ic.t-xls  { background: #e6f4ea; color: #1d6f42; }
@@ -522,6 +533,55 @@ ul.wx-list.no-row-anim li { animation: none; }
 .wx-opt .lbl small { display: block; font-size: 12px; color: var(--ink-2); margin-top: 2px; }
 .wx-opt .mark { flex: none; color: var(--green); font-size: 15px; width: 20px; text-align: center; }
 .wx-opt[data-on] .mark { color: var(--green); }
+.wx-opt.busy { opacity: .5; pointer-events: none; }
+/* Destructive actions read as destructive, the way Android colours them. */
+.wx-opt.danger .lbl b { color: var(--red); }
+
+/* ---- a setting that has several values ------------------------------------
+   Android's model, which is what the user asked for: the row shows ONLY the
+   value that is currently selected, plus a down arrow. Tapping it unfolds the
+   list. Exactly one list may be open at a time - the JavaScript guarantees it,
+   so the CSS only has to describe the two states.                          */
+.wx-sel { border-top: 1px solid var(--line); }
+.wx-srow {
+  display: flex; align-items: center; gap: 10px;
+  min-height: 50px; padding: 8px 16px;
+  cursor: pointer;
+  transition: background-color .12s ease, opacity .15s ease;
+  -webkit-tap-highlight-color: transparent;
+}
+.wx-srow:active { background: var(--press); }
+.wx-srow.busy { opacity: .5; pointer-events: none; }
+.wx-srow .lbl { flex: 1; min-width: 0; }
+.wx-srow .lbl b { display: block; font-size: 15px; font-weight: 400; color: var(--ink); }
+.wx-srow .lbl small { display: block; font-size: 12px; color: var(--ink-2); margin-top: 2px; }
+.wx-srow .val {
+  flex: none; max-width: 54%;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  font-size: 14px; color: var(--ink-2);
+}
+/* The arrow is drawn, not typed: the ▼ glyph renders differently in every font
+   and sits on the baseline, which reads as a stray character. */
+.wx-srow .arw {
+  flex: none; width: 9px; height: 9px; margin: 0 2px 4px 2px;
+  border-right: 1.7px solid var(--ink-3);
+  border-bottom: 1.7px solid var(--ink-3);
+  transform: rotate(45deg);
+  transition: transform .22s cubic-bezier(.2, .8, .3, 1);
+}
+.wx-sel.open .wx-srow .arw { transform: rotate(225deg); }
+
+/* --mh is set inline per row from the number of choices, so a long list still
+   animates fully open instead of being clipped by a fixed max-height. */
+.wx-menu {
+  max-height: 0; overflow: hidden;
+  background: var(--panel2);
+  transition: max-height .24s cubic-bezier(.2, .8, .3, 1);
+}
+.wx-sel.open .wx-menu { max-height: var(--mh, 420px); }
+.wx-menu .wx-opt { min-height: 46px; }
+.wx-menu .wx-opt:first-child { border-top: none; }
+.wx-menu .wx-opt .lbl b { font-size: 14px; }
 
 .wx-note { padding: 12px 16px; font-size: 12.5px; color: var(--ink-2); line-height: 1.6; }
 .wx-note code { font-family: ui-monospace, Consolas, monospace; font-size: 12px; }
