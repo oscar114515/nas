@@ -246,18 +246,7 @@ function fileIcon(kind) {
 function rawUrl(rel) { return API + '/api/raw?path=' + encodeURIComponent(rel) + '&t=' + encodeURIComponent(token); }
 function dlUrl(rel) { return API + '/api/download?path=' + encodeURIComponent(rel); }
 
-/* Real thumbnail for images, real first frame for video, drawn icon for the rest.
-   Capped: a folder of 200 photos would otherwise pull 200 originals down a
-   ~1.6 MB/s link just to render a list. */
-var LIVE_THUMBS = 24;
-
-function thumbFor(kind, rel, idx) {
-  if (idx < LIVE_THUMBS) {
-    if (kind === 'image') return '<img loading="lazy" alt="" src="' + rawUrl(rel) + '">';
-    if (kind === 'video') return '<video preload="metadata" muted playsinline src="' + rawUrl(rel) + '#t=0.6"></video>';
-  }
-  return fileIcon(kind);
-}
+/* Real thumbnails are handled by the serial queue further down, not here. */
 
 /* ----------------------------------------------------------------- preview */
 
@@ -395,6 +384,120 @@ function checkDisk() {
     .catch(function () { });
 }
 
+/* -------------------------------------------------------------- thumbnails
+
+   The rule, as the user stated it: ONE thumbnail downloads at a time. Twenty
+   <img> tags aimed at twenty originals on a ~1.6 MB/s link do not arrive in
+   order - they interleave, saturate the pipe, and a file can sit half-read
+   while the list already looks finished. So:
+     - every row paints its drawn type icon immediately, costing zero requests
+     - an IntersectionObserver promotes a row into the queue as it scrolls in
+     - the pump serves the queue strictly one at a time, top of the list first
+     - a row that scrolls back out before its turn is dropped again
+   Net effect: what you are looking at is what is downloading.                 */
+
+var thumbQueue = [];
+var thumbBusy = false;
+var thumbObserver = null;
+var thumbsDone = 0;
+var thumbsTotal = 0;
+
+function resetThumbs() {
+  thumbQueue.length = 0;
+  thumbBusy = false;
+  thumbsDone = 0;
+  thumbsTotal = 0;
+  if (thumbObserver) { thumbObserver.disconnect(); thumbObserver = null }
+  var el = $('more');
+  if (el) el.classList.add('hidden');
+}
+
+function watchThumbs() {
+  var rows = document.querySelectorAll('#list li[data-thumb]:not([data-done])');
+  if (!rows.length) return;
+  if (!('IntersectionObserver' in window)) {           /* old browser: no laziness available */
+    Array.prototype.forEach.call(rows, enqueueThumb);
+    return;
+  }
+  if (!thumbObserver) {
+    thumbObserver = new IntersectionObserver(function (entries) {
+      for (var i = 0; i < entries.length; i++) {
+        if (entries[i].isIntersecting) enqueueThumb(entries[i].target);
+        else dropThumb(entries[i].target);
+      }
+    }, { rootMargin: '320px 0px' });                 /* start a bit before it is on screen */
+  }
+  Array.prototype.forEach.call(rows, function (li) { thumbObserver.observe(li); });
+}
+
+function enqueueThumb(li) {
+  if (li.dataset.done || li.dataset.queued) return;
+  li.dataset.queued = '1';
+  thumbQueue.push(li);
+  thumbsTotal++;
+  paintThumbs();
+  pumpThumbs();
+}
+
+function dropThumb(li) {
+  if (li.dataset.done || !li.dataset.queued) return;
+  var i = thumbQueue.indexOf(li);
+  if (i >= 0) { thumbQueue.splice(i, 1); li.dataset.queued = ''; paintThumbs(); }
+}
+
+function pumpThumbs() {
+  if (thumbBusy) return;
+  while (thumbQueue.length) {
+    var li = thumbQueue.shift();
+    if (!li.isConnected) continue;
+    li.dataset.queued = '';
+    if (li.dataset.done) continue;
+    thumbBusy = true;
+    fetchThumb(li, function () { thumbBusy = false; pumpThumbs(); });
+    return;
+  }
+}
+
+function fetchThumb(li, next) {
+  var kind = li.dataset.kind, rel = li.dataset.thumb, box = li.querySelector('.ico');
+  var settled = false;
+  var settle = function (swapped) {
+    if (settled) return;
+    settled = true;
+    li.dataset.done = '1';
+    thumbsDone++;
+    paintThumbs();
+    next();
+  };
+
+  if (kind === 'image') {
+    var img = new Image();
+    img.alt = '';
+    img.onload = function () { if (!settled) { box.textContent = ''; box.appendChild(img); } settle(true); };
+    img.onerror = function () { settle(false); };        /* keep the icon, move on */
+    img.src = rawUrl(rel);
+  } else if (kind === 'video') {
+    var v = document.createElement('video');
+    v.muted = true; v.playsInline = true; v.preload = 'metadata';
+    v.onloadeddata = function () { try { v.currentTime = 0.6; } catch (e) { } };
+    v.onseeked = function () { if (!settled) { box.textContent = ''; box.appendChild(v); } settle(true); };
+    v.onerror = function () { settle(false); };
+    v.src = rawUrl(rel);
+    setTimeout(function () { settle(false); }, 9000);      /* never let one stall the queue */
+  } else {
+    settle(false);
+  }
+}
+
+function paintThumbs() {
+  var el = $('more');
+  if (!el) return;
+  if (!thumbsTotal) { el.classList.add('hidden'); return; }
+  el.classList.remove('hidden');
+  el.textContent = '縮圖 ' + thumbsDone + ' / ' + thumbsTotal +
+    (thumbBusy ? '　（同一時間只下一個）' : '');
+}
+
 /* ------------------------------------------------------------------- format */
 
 function fmtSize(n) {
@@ -467,11 +570,27 @@ function start() {
   load('');
 }
 
+/* ----------------------------------------------------------------- listing
+ * A folder can hold thousands of phone photos. Paging keeps the first paint
+ * cheap; the serial thumbnail queue keeps bandwidth to exactly one request at
+ * a time. Both are needed: paging alone still fires a burst of image requests. */
+
+var PAGE = 200;
+var listOffset = 0;
+var listHasMore = false;
+var listBusy = false;
+
 function load(p) {
+  listOffset = 0;
+  listHasMore = false;
+  listBusy = true;
+  resetThumbs();
   showSkeleton();
-  return req('GET', '/api/list?path=' + encodeURIComponent(p))
+  return req('GET', '/api/list?path=' + encodeURIComponent(p) + '&limit=' + PAGE + '&offset=0')
     .then(function (d) {
       cwd = d.path || '';
+      listHasMore = !!d.hasMore;
+      listOffset = (d.files || []).length;
       renderCrumbs(cwd);
       renderList(d);
       return req('GET', '/api/disk?path=' + encodeURIComponent(cwd)).then(function (k) {
@@ -486,8 +605,36 @@ function load(p) {
       li.textContent = '讀取失敗：' + e.message;
       ul.appendChild(li);
     })
-    .finally(function () { hideSkeleton(); checkDisk(); });
+    .finally(function () { hideSkeleton(); listBusy = false; checkDisk(); paintThumbs(); });
 }
+
+function loadMore() {
+  if (listBusy || !listHasMore) return;
+  listBusy = true;
+  var el = $('more');
+  var was = el.textContent;
+  el.classList.remove('hidden');
+  el.textContent = '載入中…';
+  req('GET', '/api/list?path=' + encodeURIComponent(cwd) + '&limit=' + PAGE + '&offset=' + listOffset)
+    .then(function (d) {
+      listHasMore = !!d.hasMore;
+      listOffset += (d.files || []).length;
+      appendFiles(d.files || []);
+    })
+    .catch(function (e) { toast(e.message, true); el.textContent = was; })
+    .finally(function () { listBusy = false; paintThumbs(); });
+}
+
+/* Pull the next page a screen early so the user never lands on an empty bottom. */
+var scrollArmed = false;
+window.addEventListener('scroll', function () {
+  if (scrollArmed || listBusy || !listHasMore) return;
+  scrollArmed = true;
+  requestAnimationFrame(function () {
+    scrollArmed = false;
+    if (window.innerHeight + window.pageYOffset >= document.body.offsetHeight - 600) loadMore();
+  });
+}, { passive: true });
 
 /* ------------------------------------------------------------------- chrome */
 
@@ -530,7 +677,7 @@ $('backBtn').addEventListener('click', function () {
 function renderList(d) {
   var ul = $('list');
   ul.innerHTML = '';
-  var all = d.dirs.concat(d.files);
+  var all = (d.dirs || []).concat(d.files || []);
   if (!all.length) {
     var e = document.createElement('li');
     e.className = 'empty';
@@ -538,8 +685,19 @@ function renderList(d) {
     ul.appendChild(e);
     return;
   }
+  all.forEach(function (it, idx) { ul.appendChild(buildRow(it, idx)); });
+  watchThumbs();
+}
 
-  all.forEach(function (it, idx) {
+/* Append the next page without disturbing what is already on screen. */
+function appendFiles(files) {
+  var ul = $('list');
+  (files || []).forEach(function (it, idx) { ul.appendChild(buildRow(it, idx)); });
+  watchThumbs();
+}
+
+function buildRow(it, idx) {
+  {
     var rel = cwd ? cwd + '/' + it.name : it.name;
     var kind = it.dir ? 'dir' : kindOf(it.name);
     var li = document.createElement('li');
@@ -548,8 +706,15 @@ function renderList(d) {
 
     var ic = document.createElement('span');
     ic.className = 'ico' + (KIND_CLASS[kind] ? ' ' + KIND_CLASS[kind] : '');
-    ic.innerHTML = it.dir ? fileIcon('dir') : thumbFor(kind, rel, idx);
+    ic.innerHTML = fileIcon(kind);
     li.appendChild(ic);
+
+    /* Only images and video get a real thumbnail, and only when they scroll
+       into view. The row is tagged, not preloaded - the serial queue picks it up. */
+    if (kind === 'image' || kind === 'video') {
+      li.dataset.kind = kind;
+      li.dataset.thumb = rel;
+    }
 
     var nm = document.createElement('span');
     nm.className = 'nm';
@@ -602,8 +767,8 @@ function renderList(d) {
       li.appendChild(acts);
     }
 
-    ul.appendChild(li);
-  });
+    return li;
+  }
 }
 
 /* ----------------------------------------------------------------- download */

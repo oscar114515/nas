@@ -278,6 +278,17 @@ ul.wx-list li .chev { flex: none; color: var(--ink-3); font-size: 21px; line-hei
 ul.wx-list li.empty, ul.wx-list li.skel { animation: none; }
 ul.wx-list li.empty { justify-content: center; color: var(--ink-2); font-size: 14px; padding: 32px 12px; }
 
+/* Thumbnail-queue status and the load-more line. Quiet on purpose - it sits
+   under the list and should never compete with the content. */
+.wx-more {
+  margin: 10px 16px 0;
+  padding: 9px 12px;
+  text-align: center;
+  color: var(--ink-2);
+  font-size: 12.5px;
+  font-variant-numeric: tabular-nums;
+}
+
 ul.wx-list.loading { background: transparent; }
 ul.wx-list.loading li.skel {
   height: 54px;
