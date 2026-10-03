@@ -5,7 +5,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <meta name="theme-color" content="#ededed">
 <title>Oscar NAS</title>
-<link rel="stylesheet" href="style.css">
+<link rel="stylesheet" href="style.css?v=0.1.0">
 </head>
 <body>
 
@@ -42,8 +42,16 @@
   <header class="wx-nav">
     <button class="wx-back" id="backBtn" disabled><span class="chev">‹</span>返回</button>
     <h1 id="navTitle">Oscar NAS</h1>
+    <button class="wx-nav-act" id="gearBtn" title="设置" aria-label="设置">设置</button>
+    <button class="wx-nav-act" id="verBtn" title="版本与更新日志">v0.0</button>
     <button class="wx-nav-act right" id="logoutBtn">登出</button>
   </header>
+
+  <!-- A stale browser tab is the number one reason "the fix did not work". -->
+  <div id="upbar" class="hidden">
+    <span style="flex:1">有新版本 <b id="upver"></b>，要重新整理才會生效</span>
+    <button id="upRefresh">立即更新</button>
+  </div>
 
   <!-- load progress for THIS folder only: its direct children, not a recursive
        count of everything underneath. -->
@@ -84,6 +92,17 @@
 
 <div id="toast"></div>
 
+<!-- settings + changelog share one sheet -->
+<div id="sheet" aria-hidden="true">
+  <div class="panel">
+    <div class="phead">
+      <span class="t" id="sheetTitle">设置</span>
+      <button class="btn icon" id="sheetClose">关闭</button>
+    </div>
+    <div class="pbody" id="sheetBody"></div>
+  </div>
+</div>
+
 <!-- preview sheet: images / video / audio / text / pdf open in here -->
 <div id="viewer" aria-hidden="true">
   <div class="sheet">
@@ -101,7 +120,7 @@
   </div>
 </div>
 
-<script src="config.js"></script>
-<script src="app.js"></script>
+<script src="config.js?v=0.1.0"></script>
+<script src="app.js?v=0.1.0"></script>
 </body>
 </html>

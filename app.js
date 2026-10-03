@@ -247,10 +247,24 @@ function rawUrl(rel) { return API + '/api/raw?path=' + encodeURIComponent(rel) +
 function dlUrl(rel) { return API + '/api/download?path=' + encodeURIComponent(rel); }
 
 /* Images go through /api/thumb, which shrinks them ON the machine that holds
-   the disk (System.Drawing) and caches the 220px JPEG. That is the whole
-   difference between "ten seconds per photo" and "instant after the first". */
+   the disk (ffmpeg) and caches the result. That is the whole difference between
+   "ten seconds per photo" and "one second". */
+var THUMB_KEY = 'wb_nas_thumb_w';
+var THUMB_CHOICES = [
+  { w: 110, label: '最省流量', hint: '约 5 KB 一张，最快' },
+  { w: 170, label: '标准', hint: '约 10 KB 一张（推荐）' },
+  { w: 260, label: '清晰', hint: '约 20 KB 一张' },
+  { w: 400, label: '最清晰', hint: '约 45 KB 一张，最慢' },
+];
+
+function thumbEdge() {
+  var v = parseInt(localStorage.getItem(THUMB_KEY), 10);
+  for (var i = 0; i < THUMB_CHOICES.length; i++) if (THUMB_CHOICES[i].w === v) return v;
+  return 170;
+}
+
 function thumbUrl(rel, edge) {
-  return API + '/api/thumb?path=' + encodeURIComponent(rel) + '&w=' + (edge || 220) +
+  return API + '/api/thumb?path=' + encodeURIComponent(rel) + '&w=' + (edge || thumbEdge()) +
          '&t=' + encodeURIComponent(token);
 }
 
@@ -405,14 +419,20 @@ function checkDisk() {
    Net effect: what you are looking at is what is downloading.                 */
 
 var thumbQueue = [];
-var thumbBusy = false;
+var thumbRunning = 0;
 var thumbObserver = null;
 var thumbsDone = 0;
 var thumbsTotal = 0;
 
+/* Three at a time. The user originally asked for one-at-a-time because twenty
+   300 KB originals were interleaving and leaving half-read files. A thumbnail is
+   ~10 KB now, so the pipe is not the constraint any more - the 800 ms round trip
+   is - and serialising it just made a 25-photo folder take 25 seconds. */
+var THUMB_PARALLEL = 3;
+
 function resetThumbs() {
   thumbQueue.length = 0;
-  thumbBusy = false;
+  thumbRunning = 0;
   thumbsDone = 0;
   thumbsTotal = 0;
   if (thumbObserver) { thumbObserver.disconnect(); thumbObserver = null }
@@ -456,15 +476,13 @@ function dropThumb(li) {
 }
 
 function pumpThumbs() {
-  if (thumbBusy) return;
-  while (thumbQueue.length) {
+  while (thumbRunning < THUMB_PARALLEL && thumbQueue.length) {
     var li = thumbQueue.shift();
     if (!li.isConnected) continue;
     li.dataset.queued = '';
     if (li.dataset.done) continue;
-    thumbBusy = true;
-    fetchThumb(li, function () { thumbBusy = false; pumpThumbs(); });
-    return;
+    thumbRunning++;
+    fetchThumb(li, function () { thumbRunning--; pumpThumbs(); });
   }
 }
 
@@ -480,29 +498,33 @@ function fetchThumb(li, next) {
     next();
   };
 
-  if (kind === 'image') {
+  if (kind === 'image' || kind === 'video') {
+    /* The NAS box makes the thumbnail itself - ffmpeg, which also handles video
+       frames. So both kinds are just an <img> now. Video used to need a <video>
+       element reading megabytes of the file before a frame appeared, which is
+       exactly why videos never showed a cover. */
     var img = new Image();
     img.alt = '';
+    var usedVideoFallback = false;
     img.onload = function () { if (!settled) { box.textContent = ''; box.appendChild(img); } settle(true); };
     img.onerror = function () {
-      /* The thumbnailer could not make one (HEIC / RAW / corrupt). The endpoint
-         falls back to the original bytes, so try once more before giving up and
-         leaving the icon. */
+      if (kind === 'video' && !usedVideoFallback) {
+        /* No ffmpeg on the box: fall back to letting the browser decode a frame.
+           Slow, but a cover beats an icon. */
+        usedVideoFallback = true;
+        var v = document.createElement('video');
+        v.muted = true; v.playsInline = true; v.preload = 'metadata';
+        v.onloadeddata = function () { try { v.currentTime = 0.1; } catch (e) { } };
+        v.onseeked = function () { if (!settled) { box.textContent = ''; box.appendChild(v); } settle(true); };
+        v.onerror = function () { settle(false); };
+        v.src = rawUrl(rel);
+        setTimeout(function () { settle(false); }, 12000);
+        return;
+      }
       img.onerror = function () { settle(false); };
       img.src = rawUrl(rel);
     };
     img.src = thumbUrl(rel);
-  } else if (kind === 'video') {
-    /* No Windows API can grab a frame from a video, so this one still costs real
-       bytes: the browser has to read enough of the file to decode a frame. Kept
-       in the same single-threaded queue so it cannot starve the photos. */
-    var v = document.createElement('video');
-    v.muted = true; v.playsInline = true; v.preload = 'metadata';
-    v.onloadeddata = function () { try { v.currentTime = 0.1; } catch (e) { } };
-    v.onseeked = function () { if (!settled) { box.textContent = ''; box.appendChild(v); } settle(true); };
-    v.onerror = function () { settle(false); };
-    v.src = rawUrl(rel);
-    setTimeout(function () { settle(false); }, 12000);
   } else {
     settle(false);
   }
@@ -517,7 +539,7 @@ function paintThumbs() {
       var pct = Math.round(thumbsDone / thumbsTotal * 100);
       $('progbarIn').style.width = pct + '%';
       $('progbarTxt').textContent = '已加載 ' + thumbsDone + ' / ' + thumbsTotal + '　' + pct + '%' +
-        (thumbBusy ? '　（同一時間只下一個）' : '');
+        (thumbRunning ? '　（同時 ' + thumbRunning + ' 個）' : '');
     }
   }
   if (more) {
@@ -916,7 +938,100 @@ $('refreshBtn').onclick = tap($('refreshBtn'), null, function () {
 
 $('logoutBtn').onclick = function () { logout(); };
 
+/* ------------------------------------------------------- version & settings */
+
+var APP = { version: null };
+
+/* version.json is fetched with a cache-buster, then compared against the
+   version this tab last saw. A mismatch means the user is looking at a cached
+   build - which is exactly the state that makes "I fixed it but nothing
+   changed" happen. */
+function loadVersion() {
+  return fetch('version.json?_=' + Date.now())
+    .then(function (r) { return r.json(); })
+    .then(function (v) {
+      APP.version = v;
+      $('verBtn').textContent = 'v' + v.version;
+      var seen = localStorage.getItem('wb_nas_seen_version');
+      if (seen && seen !== v.version) {
+        $('upver').textContent = 'v' + v.version;
+        $('upbar').classList.remove('hidden');
+      }
+      localStorage.setItem('wb_nas_seen_version', v.version);
+    })
+    .catch(function () { });
+}
+
+function openSheet(title, html) {
+  $('sheetTitle').textContent = title;
+  $('sheetBody').innerHTML = html;
+  $('sheet').classList.add('on');
+}
+
+function closeSheet() {
+  $('sheet').classList.remove('on');
+  $('sheetBody').innerHTML = '';
+}
+
+$('sheetClose').onclick = closeSheet;
+$('sheet').onclick = function (e) { if (e.target === this) closeSheet(); };
+$('upRefresh').onclick = function () { location.reload(true); };
+
+function showSettings() {
+  var cur = thumbEdge();
+  var h = '<div class="wx-group"><div class="gt">縮略圖清晰度</div>';
+  THUMB_CHOICES.forEach(function (c) {
+    var on = c.w === cur;
+    h += '<div class="wx-opt" data-w="' + c.w + '"' + (on ? ' data-on="1"' : '') + '>' +
+         '<span class="mark">' + (on ? '&#10003;' : '') + '</span>' +
+         '<span class="lbl"><b>' + c.label + '</b><small>' + c.hint + '</small></span></div>';
+  });
+  h += '</div><div class="wx-group"><div class="gt">維護</div>' +
+       '<div class="wx-opt" id="clearThumbs"><span class="mark"></span>' +
+       '<span class="lbl"><b>清除縮略圖快取</b><small>下次查看會重新產生</small></span></div></div>';
+  h += '<div class="wx-note">改完立刻生效（會重新載入目前這個資料夾）。<br>' +
+       '你的網路約 1.6 MB/s，縮略圖就算傳最清晰的也只要零點幾秒，' +
+       '所以清晰度的差別主要在「看起來清不清楚」，不在速度。預設是<b>標準</b>。</div>';
+  openSheet('設置', h);
+
+  Array.prototype.forEach.call($('sheetBody').querySelectorAll('.wx-opt[data-w]'), function (el) {
+    el.onclick = function () {
+      localStorage.setItem(THUMB_KEY, el.dataset.w);
+      closeSheet();
+      toast('已設定為「' + el.querySelector('b').textContent + '」');
+      load(cwd);
+    };
+  });
+
+  var ct = $('clearThumbs');
+  if (ct) ct.onclick = function () {
+    ct.classList.add('busy');
+    req('POST', '/api/thumb/clear')
+      .then(function (d) { toast('已清除 ' + d.removed + ' 張縮圖快取'); })
+      .catch(function (e) { toast(e.message, true); })
+      .finally(function () { ct.classList.remove('busy'); });
+  };
+}
+
+function showLog() {
+  var v = APP.version;
+  if (!v) { openSheet('版本與更新日誌', '<div class="wx-empty">讀取不到版本檔</div>'); return; }
+  var h = '<div class="wx-log"><div class="wx-note">' +
+          '目前版本 <code>v' + v.version + '</code>　' + v.codename + '　建於 ' + v.builtAt + '</div>';
+  (v.changes || []).forEach(function (c) {
+    h += '<div class="vline"><b>v' + c.v + '</b><span>' + c.date + '</span></div><ul>';
+    (c.items || []).forEach(function (t) { h += '<li>' + t + '</li>'; });
+    h += '</ul>';
+  });
+  openSheet('版本與更新日誌', h + '</div>');
+}
+
+$('gearBtn').onclick = showSettings;
+$('verBtn').onclick = showLog;
+
 /* --------------------------------------------------------------------- boot */
+
+loadVersion();
 
 if (token) {
   $('login').classList.add('hidden');

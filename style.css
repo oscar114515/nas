@@ -472,6 +472,86 @@ ul.wx-list.no-row-anim li { animation: none; }
 }
 #viewer .vfoot .note { flex: 1; color: var(--ink-3); font-size: 12px; }
 
+/* ------------------------------------------------- settings / changelog sheet */
+
+#sheet {
+  position: fixed; inset: 0; z-index: 55;
+  display: flex; align-items: center; justify-content: center;
+  padding: 20px;
+  background: rgba(18, 20, 24, .55);
+  opacity: 0; pointer-events: none;
+  transition: opacity .2s ease;
+}
+#sheet.on { opacity: 1; pointer-events: auto; }
+#sheet .panel {
+  width: min(620px, 96vw); max-height: min(80vh, 700px);
+  display: flex; flex-direction: column;
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  overflow: hidden;
+  transform: translateY(16px) scale(.99);
+  transition: transform .24s cubic-bezier(.2, .8, .3, 1);
+}
+#sheet.on .panel { transform: none; }
+#sheet .phead {
+  display: flex; align-items: center; gap: 10px;
+  padding: 12px 12px 12px 18px;
+  background: var(--panel-2);
+  border-bottom: 1px solid var(--line);
+}
+#sheet .phead .t { flex: 1; font-size: 15px; font-weight: 600; }
+#sheet .pbody { flex: 1; min-height: 0; overflow: auto; }
+
+.wx-group { border-bottom: 8px solid var(--page); background: var(--panel); }
+.wx-group:last-child { border-bottom: none; }
+.wx-group > .gt {
+  padding: 12px 16px 6px;
+  font-size: 12px; color: var(--ink-2);
+}
+.wx-opt {
+  display: flex; align-items: center; gap: 10px;
+  min-height: 50px; padding: 8px 16px;
+  border-top: 1px solid var(--line);
+  cursor: pointer;
+  transition: background-color .12s ease;
+}
+.wx-opt:active { background: var(--press); }
+.wx-opt .lbl { flex: 1; min-width: 0; }
+.wx-opt .lbl b { display: block; font-size: 15px; font-weight: 400; color: var(--ink); }
+.wx-opt .lbl small { display: block; font-size: 12px; color: var(--ink-2); margin-top: 2px; }
+.wx-opt .mark { flex: none; color: var(--green); font-size: 15px; width: 20px; text-align: center; }
+.wx-opt[data-on] .mark { color: var(--green); }
+
+.wx-note { padding: 12px 16px; font-size: 12.5px; color: var(--ink-2); line-height: 1.6; }
+.wx-note code { font-family: ui-monospace, Consolas, monospace; font-size: 12px; }
+
+.wx-log { padding: 4px 16px 20px; }
+.wx-log .vline { display: flex; align-items: baseline; gap: 10px; padding: 14px 0 6px; }
+.wx-log .vline b { font-size: 16px; }
+.wx-log .vline span { color: var(--ink-2); font-size: 12px; }
+.wx-log ul { margin: 0; padding-left: 20px; }
+.wx-log li { font-size: 13.5px; line-height: 1.75; color: var(--ink); }
+
+.wx-empty { padding: 30px 16px; text-align: center; color: var(--ink-2); font-size: 13px; }
+
+/* A stale tab is the single most common reason a fix "does not work". Say so,
+   loudly, instead of leaving the user wondering. */
+#upbar {
+  display: flex; align-items: center; gap: 10px;
+  padding: 10px 16px;
+  background: #e8f0fd; color: #2b579a;
+  font-size: 13px;
+}
+#upbar .btn { min-height: 30px; padding: 0 12px; font-size: 13px; background: #2b579a; border-color: #2b579a; color: #fff; }
+#upbar .btn:active { background: #1f4496; }
+
+@media (max-width: 560px) {
+  #sheet { padding: 0; }
+  #sheet .panel { width: 100vw; max-height: 100vh; height: 100vh; border-radius: 0; border: 0; }
+  .wx-nav-act { min-width: 42px; padding: 0 6px; font-size: 14px; }
+}
+
 @media (max-width: 560px) {
   ul.wx-list { margin: 0 12px; }
   .wx-toolbar { padding: 0 12px 12px; }
