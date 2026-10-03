@@ -30,6 +30,97 @@ function fmtDate(ms) {
 
 /* ---------------------------------------------------------------- transport */
 
+/* ----------------------------------------------------------- motion helpers */
+
+/* A counter, not a boolean. Requests overlap (list + disk, a rename that
+ * re-lists behind it) and the veil must only lift when the LAST one lands. */
+var busyCount = 0;
+
+function pushBusy(text) {
+  busyCount++;
+  if (text) $('busyText').textContent = text;
+  $('busy').classList.add('on');
+}
+
+function popBusy() {
+  busyCount = Math.max(0, busyCount - 1);
+  if (!busyCount) $('busy').classList.remove('on');
+}
+
+function isBusy() { return busyCount > 0; }
+
+/* Ripple from the exact tap point - the difference between "the page ignored
+ * me" and "the page heard me". Costs one span and one timeout. */
+function ripple(el, e) {
+  if (!el || !el.classList || !el.classList.contains('btn')) return;
+  var r = el.getBoundingClientRect();
+  var d = Math.max(r.width, r.height) * 1.1;
+  var s = document.createElement('span');
+  s.className = 'ripple';
+  s.style.width = s.style.height = d + 'px';
+  var cx = (e && e.clientX) ? e.clientX - r.left : r.width / 2;
+  var cy = (e && e.clientY) ? e.clientY - r.top : r.height / 2;
+  s.style.left = (cx - d / 2) + 'px';
+  s.style.top = (cy - d / 2) + 'px';
+  el.appendChild(s);
+  setTimeout(function () { if (s.parentNode) s.parentNode.removeChild(s); }, 600);
+}
+
+/* Wrap a click handler: ripple on frame one, spinner + veil while it works,
+ * errors surfaced as a toast, and the button is NEVER left stuck - even if the
+ * handler throws synchronously. */
+function tap(btn, veilText, work) {
+  return function (e) {
+    ripple(btn, e);
+    if (btn && btn.classList.contains('busy')) return;
+    var heavy = !!veilText;
+    if (heavy) { btn.classList.add('busy'); pushBusy(veilText); }
+    var done = function () { if (heavy) { btn.classList.remove('busy'); popBusy(); } };
+    var fail = function (err) {
+      done();
+      toast(err && err.message ? err.message : String(err), true);
+    };
+    try {
+      var r = work(e);
+      if (r && typeof r.then === 'function') {
+        return r.then(function (v) { done(); return v; }, fail);
+      }
+      done();
+      return r;
+    } catch (err) { fail(err); }
+  };
+}
+
+function shake(el, msg) {
+  el.textContent = msg;
+  el.classList.remove('show');
+  void el.offsetWidth;                 /* force reflow so the animation replays */
+  el.classList.add('show');
+}
+
+function showSkeleton(n) {
+  var ul = $('list');
+  ul.classList.add('loading');
+  ul.innerHTML = '';
+  for (var i = 0; i < (n || 6); i++) {
+    var li = document.createElement('li');
+    li.className = 'skel';
+    ul.appendChild(li);
+  }
+}
+
+function hideSkeleton() { $('list').classList.remove('loading'); }
+
+/* Small labelled button whose label fades out while it works. */
+function mkBtn(cls, label, veilText, work) {
+  var b = document.createElement('button');
+  b.className = 'btn icon' + (cls ? ' ' + cls : '');
+  b.innerHTML = '<span class="lbl"></span>';
+  b.querySelector('.lbl').textContent = label;
+  b.onclick = tap(b, veilText, work);
+  return b;
+}
+
 function req(method, url, body, isForm) {
   return new Promise(function (resolve, reject) {
     var x = new XMLHttpRequest();
@@ -62,8 +153,9 @@ function logout(silent) {
 $('loginForm').addEventListener('submit', function (e) {
   e.preventDefault();
   var pw = $('pw').value;
-  if (!pw) return;
-  $('loginBtn').disabled = true;
+  var btn = $('loginBtn');
+  if (!pw) { shake($('loginErr'), '請輸入密碼'); $('pw').focus(); return; }
+  btn.classList.add('busy');
   $('loginErr').textContent = '';
   req('POST', '/api/login', { password: pw })
     .then(function (d) {
@@ -73,10 +165,26 @@ $('loginForm').addEventListener('submit', function (e) {
       start();
     })
     .catch(function (err) {
-      $('loginErr').textContent = err.message === 'invalid'
-        ? '密碼不對（連續 5 次會鎖 15 分鐘）' : err.message;
+      shake($('loginErr'), err.message === 'invalid'
+        ? '密碼不對（連續 5 次會鎖 15 分鐘）' : err.message);
     })
-    .finally(function () { $('loginBtn').disabled = false; });
+    .finally(function () { btn.classList.remove('busy'); });
+});
+
+/* Show / hide the password without leaving the keyboard, and clear a stale
+ * error the moment they start typing again. */
+$('revealPw').addEventListener('click', function (e) {
+  ripple(this, e);
+  var i = $('pw');
+  var show = i.type === 'password';
+  i.type = show ? 'text' : 'password';
+  this.textContent = show ? '隱藏' : '顯示';
+  this.setAttribute('aria-label', show ? '隱藏密碼' : '顯示密碼');
+  i.focus();
+});
+
+$('pw').addEventListener('input', function () {
+  if ($('loginErr').textContent) $('loginErr').textContent = '';
 });
 
 /* -------------------------------------------------------------------- start */
@@ -85,20 +193,35 @@ function start() {
   $('login').classList.add('hidden');
   $('app').classList.remove('hidden');
   cwd = '';
-  load('');
+  pushBusy('載入硬盤中…');
+  load('').finally(function () { popBusy(); });
 }
 
 function load(p) {
-  req('GET', '/api/list?path=' + encodeURIComponent(p))
+  showSkeleton();
+  $('disk').classList.add('loading');
+  return req('GET', '/api/list?path=' + encodeURIComponent(p))
     .then(function (d) {
       cwd = d.path || '';
       renderCrumbs(cwd);
       renderList(d);
-      req('GET', '/api/disk?path=' + encodeURIComponent(cwd)).then(function (k) {
+      return req('GET', '/api/disk?path=' + encodeURIComponent(cwd)).then(function (k) {
         $('disk').textContent = fmtSize(k.free) + ' 可用 / ' + fmtSize(k.total);
       }).catch(function () { });
     })
-    .catch(function (e) { toast(e.message, true); });
+    .catch(function (e) {
+      var ul = $('list');
+      ul.innerHTML = '';
+      var li = document.createElement('li');
+      li.className = 'empty';
+      li.textContent = '讀取失敗：' + e.message;
+      ul.appendChild(li);
+      toast(e.message, true);
+    })
+    .finally(function () {
+      hideSkeleton();
+      $('disk').classList.remove('loading');
+    });
 }
 
 function renderCrumbs(p) {
@@ -137,14 +260,23 @@ function renderList(d) {
     return;
   }
 
-  all.forEach(function (it) {
+  all.forEach(function (it, idx) {
     var li = document.createElement('li');
+    li.style.setProperty('--i', String(Math.min(idx, 26)));
 
     var nm = document.createElement('div');
     nm.className = 'nm' + (it.dir ? ' dir' : '');
     nm.textContent = (it.dir ? '📁 ' : '📄 ') + it.name;
     var rel = cwd ? cwd + '/' + it.name : it.name;
-    nm.onclick = function () { it.dir ? load(rel) : download(rel); };
+    nm.onclick = function () {
+      if (it.dir) {
+        if (isBusy()) return;
+        pushBusy('載入中…');
+        load(rel).finally(popBusy);
+      } else {
+        download(rel).catch(function (e) { toast('下載失敗：' + e.message, true); });
+      }
+    };
     li.appendChild(nm);
 
     var ms = document.createElement('div');
@@ -161,36 +293,22 @@ function renderList(d) {
     acts.className = 'acts';
 
     if (!it.dir) {
-      var bd = document.createElement('button');
-      bd.className = 'btn icon';
-      bd.textContent = '下載';
-      bd.onclick = function () { download(rel); };
-      acts.appendChild(bd);
+      acts.appendChild(mkBtn('', '下載', '下載中…', function () { return download(rel); }));
     }
 
-    var br = document.createElement('button');
-    br.className = 'btn icon';
-    br.textContent = '改名';
-    br.onclick = function () {
+    acts.appendChild(mkBtn('', '改名', null, function () {
       var n = prompt('新名稱：', it.name);
-      if (!n || n === it.name) return;
-      req('POST', '/api/rename', { path: rel, newName: n })
-        .then(function () { toast('已改名'); load(cwd); })
-        .catch(function (e) { toast(e.message, true); });
-    };
-    acts.appendChild(br);
+      if (!n || n === it.name) return null;
+      return req('POST', '/api/rename', { path: rel, newName: n })
+        .then(function () { toast('已改名'); return load(cwd); });
+    }));
 
-    var bx = document.createElement('button');
-    bx.className = 'btn icon danger';
-    bx.textContent = '刪除';
-    bx.onclick = function () {
+    acts.appendChild(mkBtn('danger', '刪除', null, function () {
       var what = it.dir ? '整個文件夾（連內容）' : '檔案';
-      if (!confirm('確定刪除「' + it.name + '」' + what + '？\n此操作無法復原。')) return;
-      req('POST', '/api/delete', { path: rel })
-        .then(function () { toast('已刪除'); load(cwd); })
-        .catch(function (e) { toast(e.message, true); });
-    };
-    acts.appendChild(bx);
+      if (!confirm('確定刪除「' + it.name + '」' + what + '？\n此操作無法復原。')) return null;
+      return req('POST', '/api/delete', { path: rel })
+        .then(function () { toast('已刪除'); return load(cwd); });
+    }));
 
     li.appendChild(acts);
     ul.appendChild(li);
@@ -198,10 +316,10 @@ function renderList(d) {
 }
 
 function download(rel) {
-  /* Direct link so the browser handles the download and can resume. */
-  toast('開始下載…');
+  /* Fetch it here rather than handing the browser a bare link, so the button can
+   * show a spinner and we can surface a real error instead of a silent nothing. */
   var url = API + '/api/download?path=' + encodeURIComponent(rel);
-  fetch(url, { headers: { Authorization: 'Bearer ' + token } })
+  return fetch(url, { headers: { Authorization: 'Bearer ' + token } })
     .then(function (r) {
       if (!r.ok) throw new Error('HTTP ' + r.status);
       return r.blob();
@@ -213,13 +331,13 @@ function download(rel) {
       document.body.appendChild(a);
       a.click();
       setTimeout(function () { URL.revokeObjectURL(a.href); a.remove(); }, 4000);
-    })
-    .catch(function (e) { toast('下載失敗：' + e.message, true); });
+      toast('已下載 ' + rel.split('/').pop());
+    });
 }
 
 /* ------------------------------------------------------------------- upload */
 
-$('upBtn').onclick = function () { $('files').click(); };
+$('upBtn').onclick = tap($('upBtn'), null, function () { $('files').click(); });
 
 $('files').onchange = function () {
   var fs = Array.prototype.slice.call($('files').files);
@@ -231,9 +349,11 @@ $('files').onchange = function () {
 function uploadNext(list, i) {
   if (i >= list.length) {
     $('prog').classList.add('hidden');
+    $('upBtn').classList.remove('busy');
     load(cwd);
     return;
   }
+  if (i === 0) $('upBtn').classList.add('busy');
   var f = list[i];
   var fd = new FormData();
   fd.append('files', f, f.name);
@@ -258,11 +378,13 @@ function uploadNext(list, i) {
       var msg = 'HTTP ' + x.status;
       try { msg = JSON.parse(x.responseText).error || msg; } catch (e) { }
       $('prog').classList.add('hidden');
+      $('upBtn').classList.remove('busy');
       toast('上傳失敗（' + f.name + '）：' + msg, true);
     }
   };
   x.onerror = function () {
     $('prog').classList.add('hidden');
+    $('upBtn').classList.remove('busy');
     toast('上傳中斷（' + f.name + '）', true);
   };
   x.send(fd);
@@ -270,24 +392,32 @@ function uploadNext(list, i) {
 
 /* --------------------------------------------------------------- new folder */
 
-$('mkdirBtn').onclick = function () {
+$('mkdirBtn').onclick = tap($('mkdirBtn'), null, function () {
   var n = prompt('新文件夾名稱：');
-  if (!n) return;
-  req('POST', '/api/mkdir', { path: cwd, name: n })
-    .then(function () { toast('已建立'); load(cwd); })
-    .catch(function (e) { toast(e.message, true); });
-};
+  if (!n) return null;
+  return req('POST', '/api/mkdir', { path: cwd, name: n })
+    .then(function () { toast('已建立'); return load(cwd); });
+});
 
-$('refreshBtn').onclick = function () { load(cwd); toast('已重新整理'); };
-$('logoutBtn').onclick = function () { logout(); };
+$('refreshBtn').onclick = tap($('refreshBtn'), null, function () {
+  return load(cwd).then(function () { toast('已重新整理'); });
+});
+
+$('logoutBtn').onclick = tap($('logoutBtn'), null, function () { logout(); });
 
 /* -------------------------------------------------------------------- boot */
 
 if (token) {
-  req('GET', '/api/whoami').then(start).catch(function () {
-    token = '';
-    localStorage.removeItem(TOKEN_KEY);
-  });
+  pushBusy('驗證中…');
+  req('GET', '/api/whoami')
+    .then(start)
+    .catch(function () {
+      token = '';
+      localStorage.removeItem(TOKEN_KEY);
+      $('app').classList.add('hidden');
+      $('login').classList.remove('hidden');
+    })
+    .finally(popBusy);
 } else {
   $('login').classList.remove('hidden');
 }

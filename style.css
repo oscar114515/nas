@@ -249,3 +249,141 @@ ul.list li:hover { background: var(--panel2); }
   main { padding: 10px 10px 96px; }
   header { padding: 10px 12px; }
 }
+
+/* ==========================================================================
+   Motion & feedback layer
+   Rules of the house: nothing ever blocks input for longer than ~600 ms, and
+   EVERY tap produces a visible reaction within one frame (ripple), so the UI
+   never feels dead. Anything slow gets a spinner instead of a frozen screen.
+   ========================================================================== */
+
+/* One spinner to rule them all - sized by font-size, coloured by currentColor. */
+.spin {
+  display: inline-block;
+  width: 1em; height: 1em;
+  flex: none;
+  border: 2px solid currentColor;
+  border-right-color: transparent;
+  border-radius: 50%;
+  vertical-align: -.125em;
+  animation: wbSpin .7s linear infinite;
+}
+.spin.lg { width: 34px; height: 34px; border-width: 3px; }
+
+@keyframes wbSpin { to { transform: rotate(360deg); } }
+
+/* ---- full-screen veil, only for first paint / whole-page work ---- */
+#busy {
+  position: fixed; inset: 0; z-index: 40;
+  display: flex; flex-direction: column;
+  align-items: center; justify-content: center; gap: 14px;
+  background: rgba(15, 17, 21, .58);
+  -webkit-backdrop-filter: blur(2px);
+  backdrop-filter: blur(2px);
+  opacity: 0; pointer-events: none;
+  transition: opacity .18s ease;
+  font-size: 13px; color: var(--dim);
+}
+#busy.on { opacity: 1; pointer-events: auto; }
+#busy .spin { color: var(--accent); }
+
+/* ---- buttons ---- */
+.btn {
+  position: relative;
+  overflow: hidden;
+  transition: transform .09s ease, background .15s ease,
+              border-color .15s ease, box-shadow .15s ease, opacity .15s ease;
+}
+.btn:hover:not([disabled]) { background: #232a35; border-color: #3a4453; }
+.btn.primary:hover:not([disabled]) { background: #5f9bff; border-color: #5f9bff; }
+.btn:active:not([disabled]) { transform: scale(.955); }
+.btn:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+
+.btn.busy { pointer-events: none; opacity: .8; }
+.btn.busy > .lbl, .btn.busy > .ico { opacity: 0; }
+.btn > .lbl, .btn > .ico { transition: opacity .12s ease; }
+.btn .spin {
+  position: absolute; top: 50%; left: 50%;
+  margin: -.5em 0 0 -.5em;
+}
+
+/* ---- ripple ---- */
+.ripple {
+  position: absolute; border-radius: 50%;
+  transform: scale(0); opacity: .3;
+  background: #fff; pointer-events: none;
+  animation: wbRip .55s ease-out forwards;
+}
+@keyframes wbRip { to { transform: scale(2.8); opacity: 0; } }
+
+/* ---- list entrance + skeleton ---- */
+ul.list li {
+  animation: wbRow .28s cubic-bezier(.2, .7, .3, 1) backwards;
+  animation-delay: calc(var(--i, 0) * 20ms);
+  transition: background .12s ease;
+}
+@keyframes wbRow {
+  from { opacity: 0; transform: translateY(7px); }
+  to   { opacity: 1; transform: none; }
+}
+ul.list.loading { background: transparent; border-color: transparent; }
+ul.list.loading li.skel {
+  height: 43px;
+  background: linear-gradient(90deg, var(--panel) 25%, var(--panel2) 37%, var(--panel) 63%);
+  background-size: 400% 100%;
+  animation: wbShimmer 1.25s ease-in-out infinite;
+  border-bottom: none;
+}
+@keyframes wbShimmer { from { background-position: 100% 0; } to { background-position: 0 0; } }
+li.empty, li.skel { animation: none; }
+
+/* ---- toast slides up instead of just fading ---- */
+#toast {
+  transform: translate(-50%, 14px);
+  opacity: 0;
+  transition: opacity .2s ease, transform .24s cubic-bezier(.2, .8, .3, 1);
+}
+#toast.on { transform: translate(-50%, 0); }
+
+/* ---- password field ---- */
+.field { position: relative; }
+.field input { transition: border-color .16s ease, box-shadow .16s ease, background .16s ease; }
+/* room for the reveal button on the right */
+#pw { padding-right: 64px; }
+.field input:focus {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 3px rgba(76, 141, 255, .16);
+}
+.reveal {
+  position: absolute; right: 6px; bottom: 5px;
+  height: 30px; padding: 0 11px;
+  background: transparent;
+  border: 1px solid var(--line);
+  border-radius: 7px;
+  color: var(--dim);
+  font-size: 12px;
+  cursor: pointer;
+  transition: color .15s ease, border-color .15s ease, background .15s ease, transform .09s ease;
+}
+.reveal:hover { color: var(--text); border-color: #3a4453; background: var(--panel2); }
+.reveal:active { transform: scale(.94); }
+
+/* ---- error shake ---- */
+.err.show { animation: wbShake .34s ease; }
+@keyframes wbShake {
+  10%, 90% { transform: translateX(-1px); }
+  30%, 70% { transform: translateX(4px); }
+  50%      { transform: translateX(-4px); }
+}
+
+/* ---- disk chip dims while it is being measured ---- */
+header .disk.loading { opacity: .55; }
+
+/* ---- respect the OS "reduce motion" setting ---- */
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    animation-duration: .001ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: .001ms !important;
+  }
+}
