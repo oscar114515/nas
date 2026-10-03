@@ -371,6 +371,30 @@ document.addEventListener('keydown', function (e) {
   if (e.key === 'Escape' && $('viewer').classList.contains('on')) closeViewer();
 });
 
+/* ------------------------------------------------------------- disk banner
+
+   The exposed drive is a USB disk and it WILL get yanked. Rather than let every
+   request fail with a raw 500, poll one cheap unauthenticated endpoint and say
+   so in plain language. Polling only continues while the disk is missing. */
+
+var diskTimer = null;
+
+function checkDisk() {
+  fetch(API + '/api/health')
+    .then(function (r) { return r.json(); })
+    .then(function (d) {
+      var el = $('diskbar');
+      if (d.disk === 'connected') {
+        el.classList.add('hidden');
+        if (diskTimer) { clearInterval(diskTimer); diskTimer = null; }
+      } else {
+        el.classList.remove('hidden');
+        if (!diskTimer) diskTimer = setInterval(checkDisk, 8000);
+      }
+    })
+    .catch(function () { });
+}
+
 /* ------------------------------------------------------------------- format */
 
 function fmtSize(n) {
@@ -462,7 +486,7 @@ function load(p) {
       li.textContent = '讀取失敗：' + e.message;
       ul.appendChild(li);
     })
-    .finally(function () { hideSkeleton(); });
+    .finally(function () { hideSkeleton(); checkDisk(); });
 }
 
 /* ------------------------------------------------------------------- chrome */

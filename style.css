@@ -214,6 +214,17 @@ button, input, select { font: inherit; color: inherit; }
 
 main { padding: 0 0 96px; max-width: 660px; margin: 0 auto; }
 
+/* Shown only while the USB drive is absent. One clear sentence beats a page
+   full of failed requests. */
+#diskbar {
+  padding: 11px 16px;
+  background: #fdf3e2;
+  border-bottom: 1px solid #f0e0bd;
+  color: #8a6314;
+  font-size: 13px;
+  text-align: center;
+}
+
 .wx-pathbar {
   display: flex; align-items: center; gap: 10px;
   padding: 0 16px;
