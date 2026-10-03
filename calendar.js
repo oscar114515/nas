@@ -104,7 +104,11 @@ function showAuth() {
 function loadEvents() {
   return api('GET', '/api/events').then(function (d) {
     events = d.events || [];
+    // showAuth() writes a warning here on a 401; a later successful load must
+    // clear BOTH the warning and the "not logged in" corner label, otherwise a
+    // stale label would sit on the wall screen forever.
     $('authWarn').textContent = '';
+    $('calNote').textContent = '';
     renderCal();
     renderSide();
   }).catch(function () { showAuth(); renderCal(); });
