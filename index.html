@@ -2,21 +2,60 @@
 <html lang="zh-Hant">
 <head>
 <meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="theme-color" content="#0f1115">
 <title>Oscar NAS</title>
-<style>
-  html,body{margin:0;height:100%;background:#0f1115;color:#e6e8ee;
-    font:15px/1.6 -apple-system,"Segoe UI","Microsoft JhengHei",sans-serif;
-    display:flex;align-items:center;justify-content:center}
-  main{text-align:center;padding:24px}
-  h1{font-size:20px;font-weight:600;margin:0 0 8px}
-  p{margin:0;color:#8b93a7;font-size:13px}
-</style>
+<link rel="stylesheet" href="style.css">
 </head>
 <body>
-<main>
-  <h1>Oscar NAS</h1>
-  <p>部署进行中 · 稍后回来</p>
-</main>
+
+<!-- ============================ login ============================ -->
+<section id="login" class="hidden">
+  <form class="card" id="loginForm" autocomplete="on">
+    <h1>Oscar NAS</h1>
+    <p class="sub">輸入密碼後可存取移動硬盤 E:</p>
+    <div class="field">
+      <label for="pw">管理員密碼</label>
+      <input id="pw" type="password" inputmode="text" autocomplete="current-password"
+             spellcheck="false" autocapitalize="off" placeholder="••••••••">
+    </div>
+    <button class="btn primary" id="loginBtn" type="submit">登入</button>
+    <div class="err" id="loginErr"></div>
+  </form>
+</section>
+
+<!-- ============================= app ============================= -->
+<section id="app" class="hidden">
+  <header>
+    <div class="brand">Oscar NAS</div>
+    <div class="disk" id="disk">…</div>
+    <div class="spacer"></div>
+    <a class="btn icon" href="calendar.html">日曆</a>
+    <button class="btn icon" id="logoutBtn">登出</button>
+  </header>
+
+  <main>
+    <div class="crumbs" id="crumbs"></div>
+
+    <div class="toolbar">
+      <button class="btn" id="upBtn">⬆ 上傳檔案</button>
+      <button class="btn" id="mkdirBtn">＋ 新文件夾</button>
+      <button class="btn" id="refreshBtn">↻ 重新整理</button>
+      <input id="files" type="file" multiple class="hidden">
+    </div>
+
+    <ul class="list" id="list"></ul>
+  </main>
+
+  <div id="prog" class="hidden">
+    <div id="progText">準備中…</div>
+    <div class="bar"><i id="progBar"></i></div>
+  </div>
+</section>
+
+<div id="toast"></div>
+
+<script src="config.js"></script>
+<script src="app.js"></script>
 </body>
 </html>
